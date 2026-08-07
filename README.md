@@ -5,10 +5,10 @@ My focus is fabricating highly sensitive, electrochemically active surfaces for 
 strong data analysis skills using MATLAB and Python (Pandas, Seaborn, Matplotlib, SciPy).
 I have prepared the projects in this repository to showcase my skills in computing and data analysis, while also using it to document and track my progress in Data Analytics / Data Science.
 
-# Table of Contents
-# About
+#Table of Contents
+#about
 
-Portfolio Projects
+#Portfolio-Projects
 
 Python
 Healthcare analysis across USA
