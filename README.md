@@ -1,92 +1,99 @@
-Hi,
+# Hi, I'm Shubhangi Shukla 👋
 
-I am Shubhangi Shukla, an electrochemical biosensor scientist, I have build platforms that work, from first-principles electrode design through to point-of-care deployment. 
-My focus is fabricating highly sensitive, electrochemically active surfaces for efficient biosensor design. With 7+ years of experience in material characterization, I've built 
-strong data analysis skills using MATLAB and Python (Pandas, Seaborn, Matplotlib, SciPy).
+I am an electrochemical biosensor scientist. I have built platforms that work, from first-principles electrode design through to point-of-care deployment.
+
+My focus is fabricating highly sensitive, electrochemically active surfaces for efficient biosensor design. With 7+ years of experience in material characterization, I've built strong data analysis skills using MATLAB and Python (Pandas, Seaborn, Matplotlib, SciPy).
+
 I have prepared the projects in this repository to showcase my skills in computing and data analysis, while also using it to document and track my progress in Data Analytics / Data Science.
 
-#Table of Contents
-#about
+## Table of Contents
+- [About](#about)
+- [Portfolio Projects](#portfolio-projects)
+  - [Python](#python)
+    - [Healthcare Analysis Across USA](#healthcare-analysis-across-usa)
+- [Education](#education)
+- [Certificates](#certificates)
+- [Contact](#contact)
 
-#Portfolio-Projects
+## About
 
-Python
-Healthcare analysis across USA
+*(You can expand this section with more background on your research and career journey, or leave the intro above as your About section.)*
 
-Education
+## Portfolio Projects
 
-Certificates
+### Python
 
-Contact
+#### Healthcare Analysis Across USA
 
-Portfolio Projects
-Analysis 1
+**Analysis 1**
 
-In this section I will list data analytics projects briefly describing the how healthcare system works including the treatments on primary conditions, to insurance claims, to disease outbreaks to imaging and lab results data................................
+In this section I will list data analytics projects briefly describing how the healthcare system works — including treatments for primary conditions, insurance claims, disease outbreaks, and imaging and lab results data...
 
-Goal: To understand how diffeenrt sectors work in parallel with healthcare system.
+- **Goal:** To understand how different sectors work in parallel with the healthcare system.
+- **Code:** [Analyzing the Healthcare.ipynb](./Analyzing%20the%20Healthcare.ipynb)
+- **Description:** ...
+- **Skills:** data cleaning, data analysis, correlation matrices, hypothesis testing, data visualization.
+- **Technology:** Python, Pandas, Numpy, Seaborn, Matplotlib, SciPy.
+- **Results:** ...
 
-Code: Analyzing the Healthcare.ipynb
+---
 
-Description: ...................................
+**Analysis 2**
 
-Skills: data cleaning, data analysis, correlation matrices, hypothesis testing, data visualization.
+...
 
-Technology: Python, Pandas, Numpy, Seaborn, Matplotlib, SciPy.
+- **Goal:** ...
+- **Code:** [ABC.ipynb](./ABC.ipynb)
+- **Description:** ...
+- **Skills:** data cleaning, data analysis, hypothesis testing, data visualization.
+- **Technology:** Python, Pandas, Matplotlib.
+- **Results:** ...
 
-Results: ...............................................
+---
 
-Analysis 2
-..............................................................
+**Analysis 3**
 
-Goal: ...................................
+...
 
-Code: ABC.ipynb.......................
+- **Code:** ...
+- **Description:** ...
+- **Skills:** ...
+- **Technology:** ...
 
-Description: ......................................................
+---
 
-Skills: data cleaning, data analysis, hypothesis testing, data visualization.
+**Analysis 4**
 
-Technology: Python, Pandas, Matplotlib.
+...
 
-Results: .......................................................
+- **Code:** ...
+- **Description:** ...
+- **Skills:** ...
+- **Technology:** ...
 
-Analysis 3
-..............................................................
+---
 
-Code: ......................................................
+**Analysis 5**
 
-Description: .......................................................
+...
 
-Skills: .......................................................
+- **Goal:** ...
+- **Code:** ...
+- **Description:** ...
+- **Skills:** ...
+- **Technology:** ...
 
-Technology: ......................................................
+## Education
 
-Analysis 4
-..............................................................
+- **North Carolina State University** — Postdoc
+- **Institute of Technology (BHU)** — Doctor of Philosophy (PhD)
 
-Code: ......................................................
+## Certificates
 
-Description:.......................................................
+*(List your certificates here, e.g. "Data Analysis with Python — freeCodeCamp")*
 
-Skills: ......................................................
+## Contact
 
-Technology: ......................................................
-
-Analysis 5
-..............................................................
-
-Goal: .......................................................
-
-Code:......................................................
-
-Description: .......................................................
-
-Skills: ......................................................
-
-Technology: ......................................................
-
-Education
-North Carolina State University- Postdoc  
-
-Institute of Technology (BHU)- Doctor of Philosophy (PhD)
+*(Add your email, LinkedIn, or other contact links here, e.g.)*
+- 📧 Email: your.email@example.com
+- 💼 LinkedIn: [linkedin.com/in/yourprofile](https://linkedin.com/in/yourprofile)
