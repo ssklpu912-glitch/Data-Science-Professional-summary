@@ -30,7 +30,7 @@ I have prepared the projects in this repository to showcase my skills in computi
 In this section I will list data analytics projects briefly describing how the healthcare system works — including treatments for primary conditions, insurance claims, disease outbreaks, and imaging and lab results data...
 
 - **Goal:** To understand how different sectors work in parallel with the healthcare system.
-- **Code:** [Analyzing the Healthcare.ipynb](./Analyzing%20the%20Healthcare.ipynb)
+- **Code:** [Demo.ipynb](https://github.com/ssklpu912-glitch/Data-Science-Professional-summary/blob/main/Demo.ipynb)
 - **Description:** ...
 - **Skills:** data cleaning, data analysis, correlation matrices, hypothesis testing, data visualization.
 - **Technology:** Python, Pandas, Numpy, Seaborn, Matplotlib, SciPy.
@@ -43,7 +43,7 @@ In this section I will list data analytics projects briefly describing how the h
 ...
 
 - **Goal:** ...
-- **Code:** [ABC.ipynb](./ABC.ipynb)
+- **Code:** - [Data_Cleaning_summary.ipynb](https://github.com/ssklpu912-glitch/Data-Science-Professional-summary/blob/main/Data_Cleaning_summary.ipynb)
 - **Description:** ...
 - **Skills:** data cleaning, data analysis, hypothesis testing, data visualization.
 - **Technology:** Python, Pandas, Matplotlib.
