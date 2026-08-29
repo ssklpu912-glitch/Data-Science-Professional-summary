@@ -53,12 +53,20 @@ In this section I will list data analytics projects briefly describing how the h
 
 **Analysis 3**
 
-...
+In this section,  I have studied the stepwise ML_workflow as follows 
 
-- **Code:** ...
+1. Preprocess + EDA + Feature selection
+2. Extract input and output cols
+3. Scale the values
+4. Train test split
+5. Train the model
+6. Evaluate the model/model selection
+7. Deploy the model
+
+- **Code:** - [ML_project_Example.ipynb](https://github.com/ssklpu912-glitch/Data-Science-Professional-summary/blob/main/ML_project_Example.ipynb)
 - **Description:** ...
-- **Skills:** ...
-- **Technology:** ...
+- **Skills:** - data cleaning, data analysis, Machine learning, data visualization.
+- **Technology:** - Python, Pandas, Numpy, Seaborn, Matplotlib, Sktlearn
 
 ---
 
