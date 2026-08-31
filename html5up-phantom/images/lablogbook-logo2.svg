@@ -1,0 +1,25 @@
+<svg viewBox="0 0 560 140" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="lb-grad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2f8a54"/>
+      <stop offset="100%" stop-color="#1a472a"/>
+    </linearGradient>
+    <linearGradient id="lb-liquid2" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f0a83c"/>
+      <stop offset="100%" stop-color="#c17f24"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(10,10)">
+    <rect x="6" y="6" width="108" height="108" rx="28" fill="url(#lb-grad2)"/>
+    <path d="M53,32 L67,32 C68,32 68.5,32.6 68.5,33.5 L68.5,45 L81,74 C84,81 79,88 71,88 L49,88 C41,88 36,81 39,74 L51.5,45 L51.5,33.5 C51.5,32.6 52,32 53,32 Z"
+          fill="#ffffff" opacity="0.96"/>
+    <rect x="49.5" y="28" width="21" height="6.5" rx="3.25" fill="#ffffff" opacity="0.96"/>
+    <path d="M43.5,70 L76.5,70 L81,74 C84,81 79,88 71,88 L49,88 C41,88 36,81 39,74 Z" fill="url(#lb-liquid2)"/>
+    <circle cx="60" cy="52" r="2.4" fill="#ffffff" opacity="0.85"/>
+    <circle cx="65" cy="42" r="1.6" fill="#ffffff" opacity="0.7"/>
+  </g>
+
+  <text x="150" y="66" font-family="'DM Sans', 'Segoe UI', Helvetica, Arial, sans-serif" font-weight="700" font-size="38" letter-spacing="0.2" fill="#0f0f0f">Lab Logbook</text>
+  <text x="151" y="92" font-family="'DM Sans', 'Segoe UI', Helvetica, Arial, sans-serif" font-weight="500" font-size="15" letter-spacing="1.5" fill="#6b6b6b">RESEARCH EXPERIMENT TRACKER</text>
+</svg>

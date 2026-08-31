@@ -1,0 +1,24 @@
+<svg viewBox="0 0 560 140" xmlns="http://www.w3.org/2000/svg">
+  <g transform="translate(10,10)">
+    <path d="M60,10 C64,10 66,12 68,16 L106,54 C110,58 110,62 106,66 L68,104 C66,108 64,110 60,110 C56,110 54,108 52,104 L14,66 C10,62 10,58 14,54 L52,16 C54,12 56,10 60,10 Z"
+          fill="#f2f6ef" stroke="#3f8a56" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M94,20 l2.2,5 5,2.2 -5,2.2 -2.2,5 -2.2,-5 -5,-2.2 5,-2.2 Z" fill="#e8a13a"/>
+    <path d="M53,28 L67,28 C68.5,28 69,28.8 69,30 L69,44 L83,78 C86,85 82,92 74,92 L46,92 C38,92 34,85 37,78 L51,44 L51,30 C51,28.8 51.5,28 53,28 Z"
+          fill="#ffffff" stroke="#2d2118" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+    <rect x="49" y="24" width="22" height="7" rx="3.5" fill="#2d2118"/>
+    <path d="M40,72 C46,68 54,76 60,72 C66,68 74,76 80,72 L83,79 C85.5,84.5 82,90 76,90 L44,90 C38,90 34.5,84.5 37,79 Z"
+          fill="#e8a13a"/>
+    <circle cx="53" cy="80" r="2.6" fill="#2d2118"/>
+    <circle cx="67" cy="80" r="2.6" fill="#2d2118"/>
+    <path d="M54,86 Q60,90 66,86" fill="none" stroke="#2d2118" stroke-width="2.4" stroke-linecap="round"/>
+    <circle cx="47" cy="82" r="3" fill="#f2a6a1" opacity="0.7"/>
+    <circle cx="73" cy="82" r="3" fill="#f2a6a1" opacity="0.7"/>
+    <circle cx="60" cy="38" r="2.8" fill="#3f8a56" opacity="0.85"/>
+    <circle cx="55" cy="18" r="2" fill="#3f8a56" opacity="0.6"/>
+    <circle cx="66" cy="16" r="1.6" fill="#e8a13a" opacity="0.8"/>
+  </g>
+
+  <text x="150" y="72" font-family="'Baloo 2', 'Comic Sans MS', 'Quicksand', sans-serif" font-weight="700" font-size="46" fill="#2d2118">Lab</text>
+  <text x="150" y="112" font-family="'Baloo 2', 'Comic Sans MS', 'Quicksand', sans-serif" font-weight="700" font-size="46" fill="#3f8a56">Logbook</text>
+  <circle cx="245" cy="60" r="3.5" fill="#e8a13a"/>
+</svg>
