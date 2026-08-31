@@ -71,13 +71,12 @@ In this section,  I have studied the stepwise ML_workflow as follows
 ---
 
 **Analysis 4**
+In this section,  I have studied the univariate and multivariate analysis on Healthcare dataset, to understand the correlations between numerical/numerical, numerical/categorical and categorical/categorical data and derive useful information from the plots. This is done to understand the datasets well before diving into machine learning aspects.
 
-...
-
-- **Code:** ...
+- **Code:** - [EDA_ML_type_of_analysis.ipynb](https://github.com/ssklpu912-glitch/Data-Science-Professional-summary/blob/main/EDA_ML_type_of_analysis.ipynb)
 - **Description:** ...
-- **Skills:** ...
-- **Technology:** ...
+- **Skills:** - data analysis, data visualization.
+- **Technology:** ...Python, Pandas, Numpy, Seaborn, Matplotlib, Sktlearn
 
 ---
 
