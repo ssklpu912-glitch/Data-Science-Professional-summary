@@ -13,6 +13,7 @@ I have prepared the projects in this repository to showcase my skills in computi
     - [Healthcare Analysis Across USA](#healthcare-analysis-across-usa)
 - [Education](#education)
 - [Certificates](#certificates)
+- [Youtube-Channels](#channels)
 - [Contact](#contact)
 
 ## About
@@ -94,6 +95,9 @@ In this section,  I have studied the univariate and multivariate analysis on Hea
 
 - **North Carolina State University** — Postdoc
 - **Institute of Technology (BHU)** — Doctor of Philosophy (PhD)
+
+## You tube_Channel
+[![YouTube](https://img.shields.io/badge/YouTube-red?logo=youtube&logoColor=white)](https://www.youtube.com/@nerdygiggly_sci)
 
 ## Certificates
 
