@@ -54,7 +54,7 @@ In this section I will list data analytics projects briefly describing how the h
 
 **Analysis 3**
 
-In this section,  I have studied the stepwise ML_workflow as follows 
+In the Code1,  I have studied the stepwise ML_workflow as follows 
 
 1. Preprocess + EDA + Feature selection
 2. Extract input and output cols
@@ -64,7 +64,10 @@ In this section,  I have studied the stepwise ML_workflow as follows
 6. Evaluate the model/model selection
 7. Deploy the model
 
-- **Code:** - [ML_project_Example.ipynb](https://github.com/ssklpu912-glitch/Data-Science-Professional-summary/blob/main/ML_project_Example.ipynb)
+In code2, I have studied the Feature Engineering basics, focussing on Feature scaling and also discussed about the effect of outlier
+
+- **Code1:** - [ML_project_Example.ipynb](https://github.com/ssklpu912-glitch/Data-Science-Professional-summary/blob/main/ML_project_Example.ipynb)
+- **Code2:** - [Feature_Engineering_Feature_scaling_process.ipynb](https://github.com/ssklpu912-glitch/Data-Science-Professional-summary/blob/main/Feature_Engineering_Feature_scaling_process.ipynb)
 - **Description:** ...
 - **Skills:** - data cleaning, data analysis, Machine learning, data visualization.
 - **Technology:** - Python, Pandas, Numpy, Seaborn, Matplotlib, Sktlearn
