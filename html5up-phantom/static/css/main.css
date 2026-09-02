@@ -3329,3 +3329,52 @@ input, select, textarea {
 			}
 
 		}
+
+
+		/* Auth */
+
+	.auth-container {
+		max-width: 26em;
+		margin: 0 auto;
+		text-align: center;
+	}
+
+	.auth-header {
+		margin-bottom: 2em;
+	}
+
+	.auth-subtitle {
+		text-align: center;
+		color: rgba(88, 88, 88, 0.7);
+	}
+
+	.auth-card {
+		text-align: left;
+		border-radius: 4px;
+		border: solid 1px #c9c9c9;
+		padding: 2em;
+	}
+
+		.auth-card form {
+			display: -moz-flex;
+			display: -webkit-flex;
+			display: -ms-flex;
+			display: flex;
+			-moz-flex-direction: column;
+			-webkit-flex-direction: column;
+			-ms-flex-direction: column;
+			flex-direction: column;
+			-moz-align-items: center;
+			-webkit-align-items: center;
+			-ms-align-items: center;
+			align-items: center;
+		}
+
+			.auth-card .form-group {
+				width: 100%;
+				margin-bottom: 1.5em;
+			}
+
+				.auth-card .form-group:last-of-type {
+					margin-bottom: 2em;
+				}

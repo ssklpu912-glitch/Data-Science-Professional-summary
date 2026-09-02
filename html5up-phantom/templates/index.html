@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Lab logbook{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}" />
+{% endblock %}
+{% block content %}
+<header>
+	<h1>RESEARCH EXPERIMENT TRACKER</h1>
+	<p>Etiam quis viverra lorem, in semper lorem. Sed nisl arcu euismod sit amet nisi euismod sed cursus arcu elementum ipsum arcu vivamus quis venenatis orci lorem ipsum et magna feugiat veroeros aliquam. Lorem ipsum dolor sit amet nullam dolore.</p>
+</header>
+
+<section class="auth-section" style="max-width: 480px; margin: 0 auto; padding: 0;">
+	<div class="auth-container">
+		<div class="auth-header">
+			<h1 class="auth-title">Welcome back</h1>
+			<p class="auth-subtitle">Sign in to your LabLogbook account</p>
+		</div>
+		<div class="auth-card">
+			{% if error %}
+			<div class="auth-error">{{ error }}</div>
+			{% endif %}
+			<form method="POST" action="{{ url_for('login') }}">
+				<div class="form-group">
+					<label for="email">Email address</label>
+					<input type="email" id="email" name="email"
+						   class="form-input" placeholder="abc@example.com"
+						   required>
+				</div>
+				<div class="form-group">
+					<label for="password">Password</label>
+					<input type="password" id="password" name="password"
+						   class="form-input" placeholder="Your password"
+						   required>
+				</div>
+				<button type="submit" class="btn-submit">Sign in</button>
+			</form>
+		</div>
+		<p class="auth-switch">Don't have an account?
+			<a href="{{ url_for('register') }}">Create one free</a>
+		</p>
+	</div>
+</section>
+{% endblock %}
