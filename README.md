@@ -64,10 +64,13 @@ In the Code1,  I have studied the stepwise ML_workflow as follows
 6. Evaluate the model/model selection
 7. Deploy the model
 
-In code2, I have studied the Feature Engineering basics, focussing on Feature scaling and also discussed about the effect of outlier
+In Code2, I have studied the Feature Engineering basics, focusing on Feature scaling via Standardization and also discussed about the effect of outlier. Followed by Code 3 where feature scaling is performed via Normalization on disease outbreak data.
+
+
 
 - **Code1:** - [ML_project_Example.ipynb](https://github.com/ssklpu912-glitch/Data-Science-Professional-summary/blob/main/ML_project_Example.ipynb)
 - **Code2:** - [Feature_Engineering_Feature_scaling_process.ipynb](https://github.com/ssklpu912-glitch/Data-Science-Professional-summary/blob/main/Feature_Engineering_Feature_scaling_process.ipynb)
+- **Code3:** - [ML_Feature_Scaling_Normalisation.ipynb](https://github.com/ssklpu912-glitch/Data-Science-Professional-summary/blob/main/ML_Feature_Scaling_Normalisation.ipynb)
 - **Description:** ...
 - **Skills:** - data cleaning, data analysis, Machine learning, data visualization.
 - **Technology:** - Python, Pandas, Numpy, Seaborn, Matplotlib, Sktlearn
