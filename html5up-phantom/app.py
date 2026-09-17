@@ -2173,7 +2173,7 @@ def dp_render_plot(state):
 
 TECHNIQUE_CATEGORIES = [
     ("Spectroscopy", ["FTIR", "UV-Vis", "Fluorescence", "Raman", "NMR (1H, 13C)", "CD (Circular Dichroism)"]),
-    ("Mass & Separation", ["Mass Spec (LC-MS, MALDI)", "HPLC / GC", "GPC / SEC"]),
+    ("Mass & Separation", ["MALDI", "LC-MS", "HPLC / GC", "GPC / SEC"]),
     ("Microscopy & Imaging", ["SEM", "AFM", "TEM", "Confocal / Fluorescence", "EDS/EDX", "EBSD"]),
     ("Crystallography & Surface", ["XPS", "XRD", "BET Nitrogen Sorption"]),
     ("Biophysics & Kinetics", ["SPR / BLI", "ITC", "DLS"]),
@@ -2193,7 +2193,8 @@ TECHNIQUE_TABS = {
     "NMR (1H, 13C)": ["Select files", "Plot Spectrum", "Peak Picking", "Integration", "Format", "Analysis"],
     "CD (Circular Dichroism)": ["Select files", "Plot Spectrum", "Format", "Analysis"],
 
-    "Mass Spec (LC-MS, MALDI)": ["Select files", "Plot Spectrum", "Peak Picking", "Format", "Analysis"],
+    "MALDI": ["Select files", "Plot Spectrum", "Peak Picking", "Format", "Analysis"],
+    "LC-MS": ["Select files", "Plot Spectrum", "Peak Picking", "Format", "Analysis"],
     "HPLC / GC": ["Select files", "Plot Chromatogram", "Peak Integration", "Format", "Analysis"],
     "GPC / SEC": ["Select files", "Plot Chromatogram", "Molecular Weight", "Format", "Analysis"],
 
