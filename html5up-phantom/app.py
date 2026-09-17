@@ -817,6 +817,8 @@ CHANNEL_TYPE_INFO = {
     'pfm_phase': {'label': 'Piezoresponse phase (PFM)', 'cmap': 'RdBu_r'},
     'mfm_phase': {'label': 'Magnetic phase shift (MFM)', 'cmap': 'RdBu_r'},
     'lfm_friction': {'label': 'Lateral force / friction (LFM)', 'cmap': 'inferno'},
+    'se': {'label': 'Secondary electron (SE)', 'cmap': 'gray'},
+    'bse': {'label': 'Backscattered electron (BSE)', 'cmap': 'gray'},
 }
 
 
@@ -2172,7 +2174,7 @@ def dp_render_plot(state):
 TECHNIQUE_CATEGORIES = [
     ("Spectroscopy", ["FTIR", "UV-Vis", "Fluorescence", "Raman", "NMR (1H, 13C)", "CD (Circular Dichroism)"]),
     ("Mass & Separation", ["Mass Spec (LC-MS, MALDI)", "HPLC / GC", "GPC / SEC"]),
-    ("Microscopy & Imaging", ["SEM", "AFM", "TEM", "Confocal / Fluorescence"]),
+    ("Microscopy & Imaging", ["SEM", "AFM", "TEM", "Confocal / Fluorescence", "EDS/EDX", "EBSD"]),
     ("Crystallography & Surface", ["XPS", "XRD", "BET Nitrogen Sorption"]),
     ("Biophysics & Kinetics", ["SPR / BLI", "ITC", "DLS"]),
     ("Cellular & Phenotypic", ["FACS / Flow Cytometry", "scRNA-seq / Omics"]),
@@ -2199,6 +2201,8 @@ TECHNIQUE_TABS = {
     "AFM": ["Select data", "Topography", "Mechanical", "Electrical", "Magnetic", "Chemical / Frictional", "Biological", "Analysis"],
     "TEM": ["Select images", "Measure Particles", "Layer Thickness", "Defects", "SAED", "Lattice Fringes", "Strain Mapping", "Analysis"],
     "Confocal / Fluorescence": ["Select images", "Measure Particles", "Analysis"],
+    "EDS/EDX": ["Select files", "Plot Spectrum", "Peak Picking", "Format", "Analysis"],
+    "EBSD": ["Select images", "Measure Particles", "Analysis"],
 
     "XPS": ["Select files", "Plot Spectrum", "Peak Fitting", "Format", "Analysis"],
     "XRD": ["Select files", "Plot Pattern", "Peak ID", "Crystallite Size", "Format", "Analysis"],
@@ -2241,6 +2245,7 @@ TECHNIQUE_PLOT_MODES = {
         ("line_spectrum", "1D CD Spectrum (Line Graph)"),
         ("line_spectrum", "Thermal Denaturation Curve (Line Graph)"),
     ],
+    "eds-edx": [("line_spectrum", "EDS/EDX Spectrum: Counts vs Energy (keV) (Line Graph)")],
 }
 
 
@@ -2323,6 +2328,21 @@ CD_TABLE = [
     (195, 200, "positive band — characteristic of β-sheet"),
     (215, 220, "negative band — characteristic of β-sheet"),
     (200, 210, "negative band — characteristic of random coil"),
+]
+
+# Characteristic X-ray line energies (keV, standard Bearden reference values) for common
+# elements seen in EDS/EDX spectra — narrow windows around each Kα (or, for the heavier
+# elements more commonly seen via their M line at low keV, Mα/Lα) line, same range-table
+# shape as the other assign_peaks() tables above.
+EDS_TABLE = [
+    (0.25, 0.30, "C Kα (Carbon)"), (0.37, 0.42, "N Kα (Nitrogen)"), (0.50, 0.55, "O Kα (Oxygen)"),
+    (0.65, 0.70, "F Kα (Fluorine)"), (1.00, 1.08, "Na Kα (Sodium)"), (1.20, 1.30, "Mg Kα (Magnesium)"),
+    (1.45, 1.52, "Al Kα (Aluminum)"), (1.70, 1.78, "Si Kα (Silicon)"), (1.97, 2.05, "P Kα (Phosphorus)"),
+    (2.02, 2.08, "Pt Mα (Platinum)"), (2.10, 2.15, "Au Mα (Gold)"), (2.28, 2.34, "S Kα (Sulfur)"),
+    (2.59, 2.65, "Cl Kα (Chlorine)"), (2.95, 3.01, "Ag Lα (Silver)"), (3.28, 3.34, "K Kα (Potassium)"),
+    (3.66, 3.72, "Ca Kα (Calcium)"), (4.48, 4.54, "Ti Kα (Titanium)"), (5.38, 5.44, "Cr Kα (Chromium)"),
+    (5.87, 5.93, "Mn Kα (Manganese)"), (6.37, 6.43, "Fe Kα (Iron)"), (6.90, 6.96, "Co Kα (Cobalt)"),
+    (7.44, 7.50, "Ni Kα (Nickel)"), (8.02, 8.08, "Cu Kα (Copper)"), (8.60, 8.66, "Zn Kα (Zinc)"),
 ]
 
 
@@ -2417,6 +2437,25 @@ def generate_spectroscopy_analysis(technique_name, series_list):
             if shift > 2:
                 direction = "red-shifted" if peak_positions[-1][1] > peak_positions[0][1] else "blue-shifted"
                 results.append({'label': 'Overall', 'analysis': f"Emission maxima span {shift:.1f} nm across samples — later samples appear {direction} relative to the first, which can indicate changes in the local environment, conjugation, or aggregation state."})
+
+    elif technique_name == 'EDS/EDX':
+        for s in series_list:
+            idx, _ = find_peaks(s['y'], prominence=(max(s['y']) - min(s['y'])) * 0.05 or None)
+            peaks = [(float(s['x'][i]), float(s['y'][i])) for i in idx]
+            assigned = assign_peaks(peaks, EDS_TABLE)
+            matched = [(x, y, d) for x, y, d in assigned if d]
+            if matched:
+                total = sum(y for _, y, _ in matched)
+                comp_lines = sorted(matched, key=lambda t: t[1], reverse=True)
+                comp_text = "; ".join(
+                    f"{d} at {x:.2f} keV (~{100 * y / total:.1f}% of identified signal)" for x, y, d in comp_lines
+                )
+                text = f"{len(peaks)} peak(s) detected, {len(matched)} matched to an element. {comp_text}."
+            else:
+                text = f"{len(peaks)} peak(s) detected but none matched a known characteristic X-ray line within tolerance."
+            text += (" (Peak identification only, from standard reference line energies — not ZAF-corrected "
+                     "quantification. Treat the % as a rough relative-abundance guide, not certified composition.)")
+            results.append({'label': s['label'], 'analysis': text})
 
     return results
 
@@ -2653,7 +2692,9 @@ def technique_workspace(slug):
     parent_category = next((cat for cat, techs in TECHNIQUE_CATEGORIES if technique_name in techs), None)
 
     # Spectroscopy techniques get the fully wired workflow; others still show the placeholder for now.
-    if parent_category == 'Spectroscopy':
+    # EDS/EDX is grouped under Microscopy & Imaging (it's acquired alongside SEM/TEM imaging) but is
+    # itself a spectrum (counts vs energy), so it reuses this same tabular/spectrum pipeline.
+    if parent_category == 'Spectroscopy' or technique_name == 'EDS/EDX':
         state = tech_get_state(slug)
         all_files = DataFile.query.filter_by(file_type='tabular', technique_name=technique_name, user_id=session['user_id']).order_by(DataFile.uploaded_at.desc()).all()
         selected_files = [f for f in all_files if f.id in state['file_ids']]
@@ -2863,6 +2904,7 @@ def technique_workspace(slug):
             roughness_results=roughness_results,
             porosity_results=porosity_results,
             particle_analyses=particle_analyses,
+            channel_type_info=CHANNEL_TYPE_INFO,
             banner_image='images/characterizations-banner.png',
         )
 
@@ -3216,6 +3258,8 @@ def upload_data_file():
             if technique_name == 'AFM':
                 new_file.channel_type = channel_type or 'topography'
                 new_file.parse_status = 'image_only'
+            elif technique_name == 'SEM' and channel_type in ('se', 'bse'):
+                new_file.channel_type = channel_type
             try:
                 new_file.pixel_size_nm = extract_pixel_size_from_tiff(full_path)
                 gray = np.array(Image.open(full_path).convert('L'))

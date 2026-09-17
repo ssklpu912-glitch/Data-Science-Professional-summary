@@ -64,6 +64,16 @@
 					<label for="label">Label (optional)</label>
 					<input type="text" id="label" name="label" placeholder="e.g. Sample 3 — 30kx" />
 				</div>
+				{% if technique_name == 'SEM' %}
+				<div class="field">
+					<label for="channel_type">Imaging mode (optional)</label>
+					<select id="channel_type" name="channel_type">
+						<option value="">— Not specified —</option>
+						<option value="se">Secondary electron (SE) — topography / surface detail</option>
+						<option value="bse">Backscattered electron (BSE) — compositional / Z-contrast</option>
+					</select>
+				</div>
+				{% endif %}
 				<ul class="actions"><li><input type="submit" value="Import" class="button" /></li></ul>
 			</form>
 		</div>
@@ -80,6 +90,7 @@
 						{% if f.id in state.file_ids %}<span style="position:absolute; left:2px; top:-2px; color:#fff; font-size:12px; line-height:1;">✓</span>{% endif %}
 					</span>
 					<span style="flex: 1;"><strong>{{ f.label or f.original_filename }}</strong> <span style="color:#888; font-size:0.85em;">{{ f.uploaded_at.strftime('%Y-%m-%d') }}</span>
+						{% if f.channel_type in ('se', 'bse') %}<span style="background: #eef1ee; color: #3f4f3f; font-size: 0.75em; padding: 0.15em 0.6em; border-radius: 999px; margin-left: 0.3em;">{{ channel_type_info.get(f.channel_type, {}).get('label', f.channel_type) }}</span>{% endif %}
 						{% if f.pixel_size_nm %}<span style="color:#4caf50; font-size:0.8em;"> · scale: {{ '%.3f' % f.pixel_size_nm }} nm/px (auto-detected)</span>{% endif %}
 					</span>
 					<button type="button" onclick="event.stopPropagation(); deleteImgFile({{ f.id }}, this);" title="Delete this image"
@@ -151,11 +162,15 @@
 		{% endif %}
 
 		{% elif active_tab == 'Measure Particles' %}
-		<h2 style="margin-top:0; font-size: 1.3em;">Measure Particles</h2>
+		<h2 style="margin-top:0; font-size: 1.3em;">{{ 'Measure Grain Size' if technique_name == 'EBSD' else 'Measure Particles' }}</h2>
 		{% if not selected_images %}
 			<p style="color: #888; font-size: 0.9em;">No images selected — go to <strong>Select images</strong> first.</p>
 		{% else %}
+			{% if technique_name == 'EBSD' %}
+			<p style="color: #555; font-size: 0.9em; margin-bottom: 1.2em;">Click "Measure" on an orientation/phase map to open the click-to-measure tool for grain size, using the real calibrated scale when available from the image metadata. This measures grain boundaries you mark by eye on the map — it doesn't index Kikuchi patterns or auto-detect orientation/phase.</p>
+			{% else %}
 			<p style="color: #555; font-size: 0.9em; margin-bottom: 1.2em;">Click "Measure" on an image to open the click-to-measure particle sizing tool, using the real calibrated scale when available from the instrument's embedded metadata.</p>
+			{% endif %}
 			{% for f in selected_images %}
 			<div style="background: #f7f7f7; border-radius: 8px; padding: 1em 1.2em; margin-bottom: 0.8em; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.6em;">
 				<div>
