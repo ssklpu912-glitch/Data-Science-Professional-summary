@@ -10,7 +10,7 @@
 	<div class="doc-card" id="retention">
 		<h2>Data retention &amp; backup policy</h2>
 		<p>Everything you enter — experiments, characterizations, research papers, protocols, projects, and tasks — is stored locally in this app's own SQLite database, plus any files you upload (images, data files, PDFs) under its <code>static/uploads</code> folder. Nothing is automatically deleted: entries stay until you explicitly delete them.</p>
-		<p>LabLogbook does not run its own scheduled backups. Because it's a local application, the database file is only as safe as the backups you (or your lab's IT) take of this machine/server. If you need a snapshot, use <a href="{{ url_for('export_data') }}">Export / download all my data</a> to get a complete, portable copy at any time.</p>
+		<p>The server this app runs on backs up the database daily (via <code>backup_db.py</code>, using SQLite's own consistent-snapshot backup API rather than a plain file copy, so a backup can never catch a half-written state). The last 14 daily backups are kept. That protects against database corruption or a bad deploy — it isn't a substitute for your own copy, so if you want a portable snapshot in hand, use <a href="{{ url_for('export_data') }}">Export / download all my data</a> at any time.</p>
 	</div>
 
 	<div class="doc-card" id="privacy">
@@ -20,7 +20,7 @@
 			<li><strong>Search Papers</strong> sends your search text (and filters) to Semantic Scholar, CrossRef, and arXiv to find literature. It does not send any of your logged experimental data.</li>
 			<li><strong>Analyze / Summarize</strong> may fetch a paper's open-access PDF from its publisher/host to extract key points; it does not upload your own files or entries anywhere.</li>
 		</ul>
-		<p>Because this tool can hold unpublished, pre-publication research, treat access to the machine/account running it the same way you'd treat any other lab notebook — anyone with access to the app has access to everything logged in it (there is currently no per-entry access control).</p>
+		<p>Because this tool can hold unpublished, pre-publication research, treat access to the machine/account running it the same way you'd treat any other lab notebook. Each account only sees and can act on its own experiments, papers, protocols, projects, and files — but treat your login itself with the same care, since anyone signed in as you has access to everything you've logged.</p>
 	</div>
 </div>
 

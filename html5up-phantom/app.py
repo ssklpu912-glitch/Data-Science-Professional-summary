@@ -10,6 +10,8 @@ import re
 import time
 import secrets
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 import requests
 import pdfplumber
 import xml.etree.ElementTree as ET
@@ -50,13 +52,43 @@ def _load_secret_key():
     return key
 
 
+# Debug mode exposes Werkzeug's interactive debugger, which allows arbitrary code
+# execution from any page that errors — it must never be on in production. Defaults
+# to off; opt in locally with FLASK_DEBUG=1. Read once at module level since it also
+# gates logging setup below, not just the dev-server call at the bottom of this file.
+DEBUG_MODE = os.environ.get('FLASK_DEBUG', '0').lower() in ('1', 'true', 'yes')
+
 app = Flask(__name__)
 app.secret_key = _load_secret_key()
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
 app.config['UPLOAD_FOLDER'] = os.path.join(app.root_path, 'static', 'uploads')
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+# Caps a single request's total upload size (all files in a multi-file upload combined) —
+# without this, an unbounded upload can fill the disk. 100 MB comfortably covers a batch
+# of microscopy images or a stack of AFM height maps.
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
+app.config['SESSION_COOKIE_HTTPONLY'] = True   # JS can't read the session cookie (mitigates XSS cookie theft)
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # not sent on cross-site requests (mitigates CSRF)
+# Secure requires HTTPS — off by default so local dev over plain HTTP still works.
+# Set SESSION_COOKIE_SECURE=1 in production once the app is served over HTTPS.
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', '0').lower() in ('1', 'true', 'yes')
 db = SQLAlchemy(app)
 csrf = CSRFProtect(app)
+
+# In debug mode Flask's reloader already prints everything to the console. Outside
+# debug mode (i.e. any real deployment), nothing is logged anywhere by default —
+# so route errors and warnings need somewhere durable to land.
+if not DEBUG_MODE:
+    log_dir = os.path.join(app.root_path, 'logs')
+    os.makedirs(log_dir, exist_ok=True)
+    file_handler = RotatingFileHandler(os.path.join(log_dir, 'app.log'), maxBytes=1_000_000, backupCount=5)
+    file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s %(levelname)s %(message)s [in %(pathname)s:%(lineno)d]'
+    ))
+    file_handler.setLevel(logging.INFO)
+    app.logger.addHandler(file_handler)
+    app.logger.setLevel(logging.INFO)
+    app.logger.info('LabLogbook startup')
 
 APP_VERSION = "1.1.0"
 APP_LAST_UPDATED = "2026-09-16"
@@ -339,8 +371,9 @@ with app.app_context():
 
 
 # Every route requires a signed-in session except these — the pages you need
-# before you can have one, plus Flask's own static file server.
-PUBLIC_ENDPOINTS = {'index', 'register', 'login', 'static'}
+# before you can have one, plus Flask's own static file server and the favicon
+# every browser requests automatically regardless of what page is loaded.
+PUBLIC_ENDPOINTS = {'index', 'register', 'login', 'static', 'favicon'}
 
 
 @app.before_request
@@ -358,6 +391,21 @@ def get_owned_or_404(model, obj_id, owner_field='user_id'):
     if getattr(obj, owner_field) != session.get('user_id'):
         abort(404)
     return obj
+
+
+@app.errorhandler(413)
+def too_large(e):
+    max_mb = app.config['MAX_CONTENT_LENGTH'] // (1024 * 1024)
+    return render_template(
+        'error.html',
+        title='Upload too large',
+        message=f"That upload is over the {max_mb} MB limit for a single request. Try uploading fewer files at once, or smaller ones.",
+    ), 413
+
+
+@app.route('/favicon.ico')
+def favicon():
+    return redirect(url_for('static', filename='images/lablogbook-logo1.svg'))
 
 
 @app.route('/')
@@ -4812,10 +4860,15 @@ def export_data():
 
 
 if __name__ == '__main__':
-    # Debug mode exposes Werkzeug's interactive debugger, which allows arbitrary
-    # code execution from any page that errors — it must never be on in production.
-    # Defaults to off; opt in locally with FLASK_DEBUG=1.
-    debug_mode = os.environ.get('FLASK_DEBUG', '0').lower() in ('1', 'true', 'yes')
-    # use_reloader is kept on regardless — it's just a local file-watcher and,
-    # unlike debug, carries no risk of exposing the interactive debugger.
-    app.run(debug=debug_mode, use_reloader=True)
+    if os.environ.get('PRODUCTION', '0').lower() in ('1', 'true', 'yes'):
+        # Flask's own server (below) is explicitly unfit for production, even with
+        # debug off — no concurrency, no hardening against slow/malformed clients.
+        # waitress is a real WSGI server and works the same on Windows and Linux.
+        from waitress import serve
+        port = int(os.environ.get('PORT', 5000))
+        app.logger.info(f'Serving with waitress on 0.0.0.0:{port}')
+        serve(app, host='0.0.0.0', port=port)
+    else:
+        # use_reloader is kept on regardless — it's just a local file-watcher and,
+        # unlike debug, carries no risk of exposing the interactive debugger.
+        app.run(debug=DEBUG_MODE, use_reloader=True)
