@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Correlate samples — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>Cross-technique correlation</h1>
+	<p>Plot one logged property against another, across every sample that has both — the thing a generic chart tool can't do, because it doesn't know which rows belong to the same physical sample.</p>
+</header>
+
+<div style="max-width: 900px; margin: 0 auto;">
+
+	<p><a href="{{ url_for('samples') }}" class="el-text-btn">&larr; All samples</a></p>
+
+	{% if axes|length < 2 %}
+	<p class="el-empty">Log at least two different properties (on one or more samples) before you can correlate them. Go to <a href="{{ url_for('samples') }}">Samples</a> to add some.</p>
+	{% else %}
+
+	<div class="el-card el-form-card">
+		<form method="GET" action="{{ url_for('sample_correlate') }}">
+			<div class="el-grid-2">
+				<div class="field">
+					<label>X axis</label>
+					<select name="axis_a" required>
+						<option value="">&mdash; Select a property &mdash;</option>
+						{% for a in axes %}
+						<option value="{{ a.key }}" {{ 'selected' if a.key == axis_a else '' }}>{{ a.label }}</option>
+						{% endfor %}
+					</select>
+				</div>
+				<div class="field">
+					<label>Y axis</label>
+					<select name="axis_b" required>
+						<option value="">&mdash; Select a property &mdash;</option>
+						{% for a in axes %}
+						<option value="{{ a.key }}" {{ 'selected' if a.key == axis_b else '' }}>{{ a.label }}</option>
+						{% endfor %}
+					</select>
+				</div>
+			</div>
+			<button type="submit" class="button primary">Correlate</button>
+		</form>
+	</div>
+
+	{% if error %}
+	<p class="el-empty">{{ error }}</p>
+	{% endif %}
+
+	{% if plot_filename %}
+	<div class="el-card">
+		<img src="{{ url_for('static', filename='uploads/' + plot_filename) }}" alt="Correlation plot" style="max-width: 100%; border-radius: 8px;" />
+		{% if stats %}
+		<div class="el-meta-row" style="margin-top: 1em;">
+			<span class="el-chip">n = {{ stats.n }}</span>
+			{% if stats.r is not none %}
+			<span class="el-chip el-chip-equipment">r = {{ stats.r }}</span>
+			<span class="el-chip el-chip-equipment">R&sup2; = {{ stats.r2 }}</span>
+			{% else %}
+			<span class="el-chip">Add a 3rd sample with both properties for a trend line</span>
+			{% endif %}
+		</div>
+		{% endif %}
+		<ul class="el-milestones" style="margin-top: 1em;">
+			{% for p in points %}
+			<li><div class="el-milestone-body"><span class="el-milestone-title">{{ p.name }}</span><span class="el-muted-note">x = {{ p.x }}, y = {{ p.y }}</span></div></li>
+			{% endfor %}
+		</ul>
+	</div>
+	{% endif %}
+
+	{% endif %}
+
+</div>
+
+<style>
+	.el-card { background: #fff; border: 1px solid #ececec; border-radius: 12px; padding: 1.5em 1.7em; margin-bottom: 1em; }
+	.el-form-card { background: #f7f7f7; border-color: #f0f0f0; }
+	.el-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.2em; }
+	@media (max-width: 700px) { .el-grid-2 { grid-template-columns: 1fr; } }
+	.field { margin-bottom: 1.2em; }
+	.el-meta-row { display: flex; flex-wrap: wrap; gap: 0.4em; }
+	.el-chip { display: inline-block; background: #f1f1f1; color: #555; font-size: 0.8em; padding: 0.2em 0.75em; border-radius: 999px; margin-right: 0.4em; }
+	.el-chip-equipment { background: #eef1ee; color: #3f4f3f; }
+	.el-milestones { list-style: none; margin: 0; padding: 0; }
+	.el-milestones li { padding: 0.4em 0; border-bottom: 1px solid #f1f1f1; }
+	.el-milestones li:last-child { border-bottom: none; }
+	.el-milestone-body { display: flex; justify-content: space-between; gap: 1em; }
+	.el-milestone-title { font-weight: 600; color: #333; }
+	.el-muted-note { color: #999; font-size: 0.85em; }
+	.el-empty { color: #999; }
+</style>
+{% endblock %}

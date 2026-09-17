@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Samples — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>Samples</h1>
+	<p>Tie scalar results from different techniques to the same physical sample, then correlate them.</p>
+</header>
+
+<div style="max-width: 900px; margin: 0 auto;">
+
+	<div class="el-blurb">
+		<span>One record per physical sample</span>
+		<span>Log a result from any technique against it</span>
+		<span><a href="{{ url_for('sample_correlate') }}" style="color: inherit; text-decoration: underline;">Correlate any two properties &rarr;</a></span>
+	</div>
+
+	<div class="el-card el-form-card">
+		<h3 style="margin-top: 0;">Add a sample</h3>
+		<form method="POST" action="{{ url_for('new_sample') }}">
+			<div class="field">
+				<label for="s-name">Sample name / ID</label>
+				<input type="text" id="s-name" name="name" placeholder="e.g. GO-film-batch3-#2" required />
+			</div>
+			<div class="field">
+				<label for="s-desc">Description (optional)</label>
+				<textarea id="s-desc" name="description" rows="2" placeholder="e.g. Graphene oxide film, spin-coated, annealed 200C"></textarea>
+			</div>
+			<button type="submit" class="button primary">+ Add sample</button>
+		</form>
+	</div>
+
+	{% if samples %}
+	<div class="el-list">
+		{% for s in samples %}
+		<div class="el-card">
+			<div class="el-item-head">
+				<span class="el-item-title"><a href="{{ url_for('sample_detail', sample_id=s.id) }}" style="color: inherit;">{{ s.name }}</a></span>
+				<form method="POST" action="{{ url_for('delete_sample', sample_id=s.id) }}" onsubmit="return appConfirm(this.querySelector('[type=submit]'), 'Delete this sample and all its logged properties?');">
+					<button type="submit" class="el-text-btn el-delete">Delete</button>
+				</form>
+			</div>
+			{% if s.description %}<p class="el-desc">{{ s.description }}</p>{% endif %}
+			<div class="el-meta-row">
+				<span class="el-chip">{{ s.properties|length }} propert{{ 'y' if s.properties|length == 1 else 'ies' }}</span>
+				{% for tech in s.properties|map(attribute='technique_name')|unique|list %}
+				<span class="el-chip el-chip-equipment">{{ tech }}</span>
+				{% endfor %}
+			</div>
+			<a href="{{ url_for('sample_detail', sample_id=s.id) }}" class="el-text-btn">View / add properties &rarr;</a>
+		</div>
+		{% endfor %}
+	</div>
+	{% else %}
+	<p class="el-empty">No samples yet — add your first one above.</p>
+	{% endif %}
+
+</div>
+
+<style>
+	.el-blurb { display: flex; flex-wrap: wrap; gap: 0.6em; margin: 0 0 1.4em 0; }
+	.el-blurb span { background: #eaf4ea; color: #2a6f2a; font-size: 0.82em; font-weight: 600; padding: 0.4em 0.9em; border-radius: 999px; }
+	.el-card { background: #fff; border: 1px solid #ececec; border-radius: 12px; padding: 1.5em 1.7em; margin-bottom: 1em; }
+	.el-form-card { background: #f7f7f7; border-color: #f0f0f0; }
+	.el-form-card .field { margin-bottom: 1.2em; }
+	.el-form-card .field:last-of-type { margin-bottom: 1.4em; }
+	.el-list { display: flex; flex-direction: column; gap: 1em; }
+	.el-item-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 0.6em; }
+	.el-item-title { font-size: 1.1em; font-weight: 700; color: #21331f; margin-right: 0.6em; }
+	.el-chip { display: inline-block; background: #f1f1f1; color: #555; font-size: 0.8em; padding: 0.2em 0.75em; border-radius: 999px; margin-right: 0.4em; }
+	.el-chip-equipment { background: #eef1ee; color: #3f4f3f; }
+	.el-desc { color: #555; margin: 0.6em 0; }
+	.el-meta-row { display: flex; flex-wrap: wrap; gap: 0.4em; margin: 0.6em 0 1em 0; }
+	.el-text-btn {
+		font-size: 0.82em; font-weight: 600; color: #6b7a6b; text-decoration: none;
+		border: none; background: none; cursor: pointer; padding: 0.2em 0;
+		border-bottom: 1px solid transparent; box-shadow: none; border-radius: 0;
+		height: auto; line-height: normal; letter-spacing: normal; text-transform: none;
+		transition: color 0.15s ease, border-color 0.15s ease;
+	}
+	.el-text-btn.el-delete { color: #b3261e; }
+	.el-text-btn.el-delete:hover { color: #7a1a14; border-bottom-color: #7a1a14; }
+	.el-empty { color: #999; }
+</style>
+{% endblock %}

@@ -328,6 +328,38 @@ class Feedback(db.Model):
     page_url = db.Column(db.String(300), nullable=True)
 
 
+class Sample(db.Model):
+    """A physical sample, as the one thing every technique's data about it has in
+    common. Nothing else in the app ties AFM/TEM/XPS/etc. records together by what
+    they're actually measurements *of* — this is what makes cross-technique
+    correlation possible at all."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
+
+    properties = db.relationship(
+        'SampleProperty', backref='sample',
+        order_by='SampleProperty.technique_name', cascade='all, delete-orphan',
+    )
+
+
+class SampleProperty(db.Model):
+    """One named scalar result for a sample from a given technique — e.g.
+    (AFM, "Ra roughness", 2.4, "nm") or (XPS, "O:C ratio", 0.31, None). The
+    (technique_name, property_name) pair is the axis label used when correlating
+    two properties across every sample that has both."""
+    id = db.Column(db.Integer, primary_key=True)
+    sample_id = db.Column(db.Integer, db.ForeignKey('sample.id'), nullable=False)
+    technique_name = db.Column(db.String(100), nullable=False)
+    property_name = db.Column(db.String(100), nullable=False)
+    value = db.Column(db.Float, nullable=False)
+    unit = db.Column(db.String(30), nullable=True)
+    note = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
+
+
 with app.app_context():
     db.create_all()
 
@@ -4849,6 +4881,10 @@ def export_data():
             for pr in Project.query.filter_by(user_id=uid).all()
         ],
         'tasks': [_model_to_dict(t) for t in Task.query.filter_by(user_id=uid).all()],
+        'samples': [
+            dict(_model_to_dict(s), properties=[_model_to_dict(p) for p in s.properties])
+            for s in Sample.query.filter_by(user_id=uid).all()
+        ],
     }
     buf = io.BytesIO(json.dumps(payload, indent=2, default=str).encode('utf-8'))
     return send_file(
@@ -4856,6 +4892,160 @@ def export_data():
         mimetype='application/json',
         as_attachment=True,
         download_name=f'lablogbook-export-{datetime.now().strftime("%Y%m%d-%H%M%S")}.json',
+    )
+
+
+@app.route('/samples')
+def samples():
+    all_samples = (
+        Sample.query.filter_by(user_id=session['user_id'])
+        .order_by(Sample.created_at.desc())
+        .all()
+    )
+    return render_template('samples.html', samples=all_samples)
+
+
+@app.route('/samples/new', methods=['POST'])
+def new_sample():
+    sample = Sample(
+        user_id=session['user_id'],
+        name=request.form['name'].strip(),
+        description=(request.form.get('description', '').strip() or None),
+    )
+    db.session.add(sample)
+    db.session.commit()
+    return redirect(url_for('sample_detail', sample_id=sample.id))
+
+
+@app.route('/samples/<int:sample_id>')
+def sample_detail(sample_id):
+    sample = get_owned_or_404(Sample, sample_id)
+    by_technique = {}
+    for prop in sample.properties:
+        by_technique.setdefault(prop.technique_name, []).append(prop)
+    return render_template('sample_detail.html', sample=sample, by_technique=by_technique)
+
+
+@app.route('/samples/<int:sample_id>/delete', methods=['POST'])
+def delete_sample(sample_id):
+    sample = get_owned_or_404(Sample, sample_id)
+    db.session.delete(sample)
+    db.session.commit()
+    return redirect(url_for('samples'))
+
+
+@app.route('/samples/<int:sample_id>/properties/new', methods=['POST'])
+def new_sample_property(sample_id):
+    sample = get_owned_or_404(Sample, sample_id)
+    prop = SampleProperty(
+        sample_id=sample.id,
+        technique_name=request.form['technique_name'].strip(),
+        property_name=request.form['property_name'].strip(),
+        value=request.form.get('value', type=float),
+        unit=(request.form.get('unit', '').strip() or None),
+        note=(request.form.get('note', '').strip() or None),
+    )
+    db.session.add(prop)
+    db.session.commit()
+    return redirect(url_for('sample_detail', sample_id=sample.id))
+
+
+@app.route('/samples/<int:sample_id>/properties/<int:prop_id>/delete', methods=['POST'])
+def delete_sample_property(sample_id, prop_id):
+    sample = get_owned_or_404(Sample, sample_id)
+    prop = SampleProperty.query.get_or_404(prop_id)
+    if prop.sample_id != sample.id:
+        abort(404)
+    db.session.delete(prop)
+    db.session.commit()
+    return redirect(url_for('sample_detail', sample_id=sample.id))
+
+
+def _sample_property_axes():
+    """Distinct (technique, property, unit) combos the user has logged, used to
+    populate the two correlation dropdowns — each entry becomes one selectable axis."""
+    rows = (
+        db.session.query(
+            SampleProperty.technique_name, SampleProperty.property_name, SampleProperty.unit
+        )
+        .join(Sample, SampleProperty.sample_id == Sample.id)
+        .filter(Sample.user_id == session['user_id'])
+        .distinct()
+        .order_by(SampleProperty.technique_name, SampleProperty.property_name)
+        .all()
+    )
+    seen = {}
+    for technique_name, property_name, unit in rows:
+        key = f"{technique_name}|{property_name}"
+        if key not in seen:
+            label = f"{technique_name} — {property_name}" + (f" ({unit})" if unit else '')
+            seen[key] = {'key': key, 'label': label}
+    return list(seen.values())
+
+
+@app.route('/samples/correlate')
+def sample_correlate():
+    axes = _sample_property_axes()
+    axis_a = request.args.get('axis_a', '')
+    axis_b = request.args.get('axis_b', '')
+    plot_filename = None
+    points = []
+    stats = None
+    error = None
+
+    if axis_a and axis_b:
+        if axis_a == axis_b:
+            error = "Pick two different properties to correlate."
+        else:
+            tech_a, prop_a = axis_a.split('|', 1)
+            tech_b, prop_b = axis_b.split('|', 1)
+            user_samples = Sample.query.filter_by(user_id=session['user_id']).all()
+            for sample in user_samples:
+                val_a = next(
+                    (p.value for p in sample.properties
+                     if p.technique_name == tech_a and p.property_name == prop_a), None
+                )
+                val_b = next(
+                    (p.value for p in sample.properties
+                     if p.technique_name == tech_b and p.property_name == prop_b), None
+                )
+                if val_a is not None and val_b is not None:
+                    points.append({'name': sample.name, 'x': val_a, 'y': val_b})
+
+            if len(points) < 2:
+                error = "Fewer than 2 samples have both properties logged — need at least 2 to plot, 3+ for a trend line."
+            else:
+                xs = np.array([p['x'] for p in points])
+                ys = np.array([p['y'] for p in points])
+
+                fig, ax = plt.subplots(figsize=(7, 5.5))
+                ax.scatter(xs, ys, s=70, color='#2a6f2a', zorder=3)
+                for p in points:
+                    ax.annotate(p['name'], (p['x'], p['y']), fontsize=8,
+                                xytext=(6, 6), textcoords='offset points', color='#444')
+
+                if len(points) >= 3 and np.std(xs) > 0:
+                    slope, intercept = np.polyfit(xs, ys, 1)
+                    fit_x = np.linspace(xs.min(), xs.max(), 100)
+                    ax.plot(fit_x, slope * fit_x + intercept, '--', color='#c0392b', linewidth=1.5, zorder=2)
+                    r = np.corrcoef(xs, ys)[0, 1]
+                    stats = {'r': round(float(r), 3), 'r2': round(float(r ** 2), 3), 'n': len(points)}
+                else:
+                    stats = {'r': None, 'r2': None, 'n': len(points)}
+
+                ax.set_xlabel(next(a['label'] for a in axes if a['key'] == axis_a))
+                ax.set_ylabel(next(a['label'] for a in axes if a['key'] == axis_b))
+                ax.grid(alpha=0.25)
+                fig.tight_layout()
+
+                plot_filename = f"correlate_{int(datetime.now().timestamp())}.png"
+                fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], plot_filename), dpi=130)
+                plt.close(fig)
+
+    return render_template(
+        'sample_correlate.html',
+        axes=axes, axis_a=axis_a, axis_b=axis_b,
+        plot_filename=plot_filename, points=points, stats=stats, error=error,
     )
 
 
