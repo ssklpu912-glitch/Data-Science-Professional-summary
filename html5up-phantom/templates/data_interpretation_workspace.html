@@ -55,6 +55,9 @@
 		<tr><td class="{{ 'active' if tab == 'analysis' else '' }}">
 			<a href="{{ url_for('data_interpretation_workspace', tab='analysis') }}">📊 Analysis</a>
 		</td></tr>
+		<tr><td class="{{ 'active' if tab == 'snapshots' else '' }}">
+			<a href="{{ url_for('data_interpretation_workspace', tab='snapshots') }}">📸 Snapshots</a>
+		</td></tr>
 		<tr><td style="padding: 0.4em 0 0 0 !important; background: none !important;">
 			<form method="POST" action="{{ url_for('dp_reset') }}" onsubmit="return appConfirm(this.querySelector('[type=submit]'), 'Clear the current file selection and plot?');">
 				<button type="submit" style="display: block; width: 100%; text-align: left; padding: 0.8em 1.1em; background: none; border: none; border-top: 1px solid #ddd; color: #999; cursor: pointer; font-size: 0.85em; height: auto; line-height: normal; letter-spacing: normal; text-transform: none; box-shadow: none; border-radius: 0; font-weight: normal;">↺ Reset</button>
@@ -364,6 +367,48 @@
 					</table>
 				</div>
 			</details>
+		{% endif %}
+
+		{% elif tab == 'snapshots' %}
+		<h2 style="margin-top:0; font-size: 1.3em;">Snapshots</h2>
+		<p style="color: #888; font-size: 0.85em; margin-top: -0.6em;">A snapshot freezes the current plot and analysis exactly as they are now — including their own copy of the plot image — so you can come back to this exact result later, even if the source files change, and restore its configuration into a live session with one click.</p>
+
+		{% if not state.file_ids %}
+			<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> and <strong>Plot</strong> first, then save a snapshot here.</p>
+		{% else %}
+		<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.4em;">
+			<form method="POST" action="{{ url_for('dp_save_snapshot') }}">
+				<div class="field">
+					<label for="snap-title">Title</label>
+					<input type="text" id="snap-title" name="title" placeholder="e.g. GO-film XPS ratio vs anneal temp" />
+				</div>
+				<div class="field">
+					<label for="snap-note">Note (optional)</label>
+					<textarea id="snap-note" name="note" rows="2" placeholder="Why this result matters, what to compare it against later, etc."></textarea>
+				</div>
+				<ul class="actions"><li><input type="submit" value="📸 Save current analysis as snapshot" class="primary" /></li></ul>
+			</form>
+		</div>
+		{% endif %}
+
+		{% if snapshots %}
+		<div style="display: flex; flex-direction: column; gap: 1em;">
+			{% for snap in snapshots %}
+			<div style="background: #fff; border: 1px solid #ececec; border-radius: 10px; padding: 1.1em 1.3em; display: flex; gap: 1em; align-items: center;">
+				{% if snap.plot_filename %}
+				<a href="{{ url_for('dp_view_snapshot', snapshot_id=snap.id) }}"><img src="{{ url_for('static', filename='uploads/' + snap.plot_filename) }}" alt="" style="width: 110px; height: 80px; object-fit: cover; border-radius: 6px; border: 1px solid #ddd;" /></a>
+				{% endif %}
+				<div style="flex: 1; min-width: 0;">
+					<a href="{{ url_for('dp_view_snapshot', snapshot_id=snap.id) }}" style="font-weight: 700; color: #21331f; text-decoration: none;">{{ snap.title }}</a>
+					<div style="color: #888; font-size: 0.82em; margin-top: 0.2em;">{{ snap.created_at.strftime('%Y-%m-%d %H:%M') }} &middot; {{ snap.plot_type }}</div>
+					{% if snap.note %}<div style="color: #555; font-size: 0.85em; margin-top: 0.3em;">{{ snap.note }}</div>{% endif %}
+				</div>
+				<a href="{{ url_for('dp_view_snapshot', snapshot_id=snap.id) }}" class="el-text-btn">View</a>
+			</div>
+			{% endfor %}
+		</div>
+		{% else %}
+		<p class="el-empty" style="color: #999;">No snapshots saved yet.</p>
 		{% endif %}
 		{% endif %}
 	</div>

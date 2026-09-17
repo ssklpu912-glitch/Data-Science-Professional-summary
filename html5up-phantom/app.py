@@ -10,6 +10,7 @@ import re
 import time
 import secrets
 import json
+import shutil
 import logging
 from logging.handlers import RotatingFileHandler
 import requests
@@ -217,14 +218,21 @@ class OverlayPlot(db.Model):
     plot_filename = db.Column(db.String(300), nullable=True)
 
 
-class CustomPlot(db.Model):
+class AnalysisSnapshot(db.Model):
+    """A frozen copy of a Data Interpretation plot and its analysis, captured exactly as it
+    looked at save time — including its own copy of the plot image — so it stays reproducible
+    even if the underlying data files are later edited, reparsed, or deleted. Mirrors Protocol
+    versioning: a named, point-in-time record you can revisit or restore into a live, editable
+    session again, rather than a live view that silently changes underneath you."""
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
-    title = db.Column(db.String(200), nullable=True)
-    plot_type = db.Column(db.String(30), nullable=False)   # scatter/line/bar/histogram/box
-    config_json = db.Column(db.Text, nullable=False)       # series definitions + customization options
-    analysis_json = db.Column(db.Text, nullable=True)      # per-series stats/analysis text
+    title = db.Column(db.String(200), nullable=False)
+    note = db.Column(db.Text, nullable=True)
+    plot_type = db.Column(db.String(30), nullable=False)
+    state_json = db.Column(db.Text, nullable=False)        # dp_state at capture time (file_ids, plot_type, derivative, format)
+    results_json = db.Column(db.Text, nullable=False)      # per-series stats/analysis/shape at capture time
+    overall_analysis = db.Column(db.Text, nullable=True)
     plot_filename = db.Column(db.String(300), nullable=True)
 
 
@@ -2981,6 +2989,10 @@ def data_interpretation_workspace():
     if tab in ('plot', 'format', 'derivative', 'analysis') and state['file_ids']:
         plot_filename, results, plot_errors, overall_analysis = dp_render_plot(state)
 
+    snapshots = []
+    if tab == 'snapshots':
+        snapshots = AnalysisSnapshot.query.filter_by(user_id=session['user_id']).order_by(AnalysisSnapshot.created_at.desc()).all()
+
     return render_template(
         'data_interpretation_workspace.html',
         page_title='Data Interpretation',
@@ -2989,6 +3001,7 @@ def data_interpretation_workspace():
         all_files=all_files,
         image_files=image_files,
         selected_files=selected_files,
+        snapshots=snapshots,
         plot_filename=plot_filename,
         results=results,
         plot_errors=plot_errors,
@@ -3063,6 +3076,72 @@ def dp_set_derivative():
 def dp_reset():
     session.pop('dp_state', None)
     return redirect(url_for('data_interpretation_workspace', tab='select'))
+
+
+@app.route('/characterizations/data/snapshots/save', methods=['POST'])
+def dp_save_snapshot():
+    state = dp_get_state()
+    if not state.get('file_ids'):
+        return redirect(url_for('data_interpretation_workspace', tab='snapshots'))
+
+    plot_filename, results, plot_errors, overall_analysis = dp_render_plot(state)
+    if not plot_filename:
+        session['di_error'] = "Could not generate a plot to snapshot — check your file selection."
+        return redirect(url_for('data_interpretation_workspace', tab='snapshots'))
+
+    title = request.form.get('title', '').strip() or f"Snapshot {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    note = request.form.get('note', '').strip() or None
+
+    snapshot_filename = f"snapshot_{session['user_id']}_{int(datetime.now().timestamp())}.png"
+    shutil.copy(
+        os.path.join(app.config['UPLOAD_FOLDER'], plot_filename),
+        os.path.join(app.config['UPLOAD_FOLDER'], snapshot_filename),
+    )
+
+    snapshot = AnalysisSnapshot(
+        user_id=session['user_id'],
+        title=title,
+        note=note,
+        plot_type=state.get('plot_type', 'scatter_plot'),
+        state_json=json.dumps(state),
+        results_json=json.dumps(results, default=str),
+        overall_analysis=overall_analysis,
+        plot_filename=snapshot_filename,
+    )
+    db.session.add(snapshot)
+    db.session.commit()
+    return redirect(url_for('dp_view_snapshot', snapshot_id=snapshot.id))
+
+
+@app.route('/characterizations/data/snapshots/<int:snapshot_id>')
+def dp_view_snapshot(snapshot_id):
+    snapshot = get_owned_or_404(AnalysisSnapshot, snapshot_id)
+    return render_template(
+        'dp_snapshot_detail.html',
+        snapshot=snapshot,
+        results=json.loads(snapshot.results_json),
+        state=json.loads(snapshot.state_json),
+    )
+
+
+@app.route('/characterizations/data/snapshots/<int:snapshot_id>/restore', methods=['POST'])
+def dp_restore_snapshot(snapshot_id):
+    snapshot = get_owned_or_404(AnalysisSnapshot, snapshot_id)
+    dp_save_state(json.loads(snapshot.state_json))
+    return redirect(url_for('data_interpretation_workspace', tab='plot'))
+
+
+@app.route('/characterizations/data/snapshots/<int:snapshot_id>/delete', methods=['POST'])
+def dp_delete_snapshot(snapshot_id):
+    snapshot = get_owned_or_404(AnalysisSnapshot, snapshot_id)
+    if snapshot.plot_filename:
+        try:
+            os.remove(os.path.join(app.config['UPLOAD_FOLDER'], snapshot.plot_filename))
+        except OSError:
+            pass
+    db.session.delete(snapshot)
+    db.session.commit()
+    return redirect(url_for('data_interpretation_workspace', tab='snapshots'))
 
 
 @app.route('/characterizations/data/upload', methods=['POST'])
@@ -4958,6 +5037,7 @@ def export_data():
             dict(_model_to_dict(s), properties=[_model_to_dict(p) for p in s.properties])
             for s in Sample.query.filter_by(user_id=uid).all()
         ],
+        'analysis_snapshots': [_model_to_dict(s) for s in AnalysisSnapshot.query.filter_by(user_id=uid).all()],
     }
     buf = io.BytesIO(json.dumps(payload, indent=2, default=str).encode('utf-8'))
     return send_file(
