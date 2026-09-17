@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Lattice Fringes — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>Lattice fringe spacing (FFT)</h1>
+	<p>{{ data_file.label or data_file.original_filename }}</p>
+	<p><a href="{{ url_for('technique_workspace', slug='tem', tab='Lattice Fringes') }}">← Back to Lattice Fringes</a></p>
+</header>
+
+<div style="max-width: 1000px; margin: 0 auto;">
+	<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em 1.5em; margin-bottom: 1.5em;">
+		<p style="margin: 0;"><strong>How to use:</strong> this is the image's own FFT power spectrum — the bright spots away from the center correspond to periodic lattice fringes in the real-space image. Click each spot you want to measure; spacing is computed directly from the spot's distance from the center and the image's calibrated pixel size ({{ '%.4f' % pixel_size_nm }} nm/px).</p>
+	</div>
+
+	<div style="display: flex; gap: 1.5em; align-items: flex-start;">
+		<div style="flex: 1; overflow: auto; border: 1px solid #ddd; border-radius: 8px; background: black;">
+			<canvas id="measure-canvas" style="display: block; max-width: 100%; cursor: crosshair;"></canvas>
+		</div>
+		<div style="flex: 0 0 260px;">
+			<h3 style="margin-top: 0;">Spots (<span id="count">0</span>)</h3>
+			<div id="spot-list" style="max-height: 420px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 0.5em;"></div>
+			<div style="margin-top: 1em; display: flex; gap: 0.6em;">
+				<button type="button" onclick="undoLast()" class="button" style="flex: 1;">Undo</button>
+				<button type="button" onclick="clearAll()" class="button" style="flex: 1;">Clear all</button>
+			</div>
+			<form method="POST" action="{{ url_for('save_lattice_fringe_measurement', file_id=data_file.id) }}" style="margin-top: 1em;">
+				<input type="hidden" name="spots" id="spots_input" value="[]" />
+				<input type="submit" value="Save & analyze" class="primary" style="width: 100%;" onclick="return prepareSubmit();" />
+			</form>
+		</div>
+	</div>
+</div>
+
+<script>
+	const canvas = document.getElementById('measure-canvas');
+	const ctx = canvas.getContext('2d');
+	const img = new Image();
+	img.crossOrigin = 'anonymous';
+	img.src = "{{ url_for('static', filename='uploads/' + fft_filename) }}";
+
+	const imgW = {{ img_w }};
+	const imgH = {{ img_h }};
+	const pixelSizeNm = {{ pixel_size_nm }};
+	let scaleFactor = 1;
+	let spots = [];
+
+	img.onload = function () {
+		const maxDisplayWidth = 700;
+		scaleFactor = Math.min(1, maxDisplayWidth / img.naturalWidth);
+		canvas.width = img.naturalWidth * scaleFactor;
+		canvas.height = img.naturalHeight * scaleFactor;
+		redraw();
+	};
+
+	function spacingFor(xFull, yFull) {
+		const cx = imgW / 2.0, cy = imgH / 2.0;
+		const fx = (xFull - cx) / (imgW * pixelSizeNm);
+		const fy = (yFull - cy) / (imgH * pixelSizeNm);
+		const f = Math.hypot(fx, fy);
+		return f === 0 ? null : 1 / f;
+	}
+
+	function redraw() {
+		ctx.clearRect(0, 0, canvas.width, canvas.height);
+		ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+		spots.forEach(function (s, i) {
+			ctx.fillStyle = '#00e5ff';
+			ctx.beginPath(); ctx.arc(s.x, s.y, 4, 0, 2 * Math.PI); ctx.fill();
+			ctx.fillStyle = 'white'; ctx.font = 'bold 11px sans-serif';
+			ctx.fillText(String(i + 1), s.x + 5, s.y - 5);
+		});
+	}
+
+	canvas.addEventListener('click', function (e) {
+		const rect = canvas.getBoundingClientRect();
+		const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+		const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+		spots.push({ x: x, y: y });
+		updateList();
+		redraw();
+	});
+
+	function updateList() {
+		document.getElementById('count').textContent = spots.length;
+		const listEl = document.getElementById('spot-list');
+		listEl.innerHTML = '';
+		spots.forEach(function (s, i) {
+			const xFull = s.x / scaleFactor, yFull = s.y / scaleFactor;
+			const d = spacingFor(xFull, yFull);
+			const div = document.createElement('div');
+			div.style.cssText = 'display:flex; justify-content:space-between; padding:0.4em 0.3em; border-bottom:1px solid #eee; cursor:pointer; font-size:0.9em;';
+			div.innerHTML = '<span>#' + (i + 1) + ': ' + (d ? d.toFixed(4) + ' nm' : '—') + '</span><span style="color:#b3261e;">✕</span>';
+			div.onclick = function () { spots.splice(i, 1); updateList(); redraw(); };
+			listEl.appendChild(div);
+		});
+	}
+
+	function undoLast() { spots.pop(); updateList(); redraw(); }
+	function clearAll() { spots = []; updateList(); redraw(); }
+
+	function prepareSubmit() {
+		if (spots.length === 0) { alert('Click at least one spot.'); return false; }
+		document.getElementById('spots_input').value = JSON.stringify(spots.map(function (s) {
+			return { x: s.x / scaleFactor, y: s.y / scaleFactor };
+		}));
+		return true;
+	}
+</script>
+{% endblock %}

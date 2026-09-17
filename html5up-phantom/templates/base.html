@@ -9,19 +9,36 @@
 		<title>{% block title %}Lab logbook{% endblock %}</title>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+		<meta name="csrf-token" content="{{ csrf_token() }}" />
 		<link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}" />
 		<noscript><link rel="stylesheet" href="{{ url_for('static', filename='css/noscript.css') }}" /></noscript>
+		<style>
+			.ftr-grid { display: flex; flex-wrap: wrap; gap: 2.5em; width: 100%; }
+			.ftr-col { flex: 1 1 200px; min-width: 180px; }
+			.ftr-col h2 {
+				font-size: 0.85em; font-weight: 700; text-transform: uppercase;
+				letter-spacing: 0.06em; color: #2a6f2a; margin: 0 0 1em 0;
+			}
+			.ftr-links { list-style: none; margin: 0; padding: 0; }
+			.ftr-links li { margin-bottom: 0.7em; }
+			.ftr-links a { color: #666; font-size: 0.92em; border-bottom-color: transparent; }
+			.ftr-links a:hover { color: #2a6f2a; }
+			.ftr-about-text { color: #777; font-size: 0.9em; line-height: 1.7; margin: 0; }
+			.ftr-copyright { width: 100%; margin-top: 3em !important; }
+		</style>
 		{% block extra_head %}{% endblock %}
 	</head>
 	<body class="is-preload">
 		<!-- Wrapper -->
 			<div id="wrapper">
 				<!-- Header -->
-					<header id="header">
-						<div class="inner">
+					<header id="header" style="position: relative; overflow: hidden; min-height: 70px;">
+						<img src="{{ url_for('static', filename=banner_image if banner_image else 'images/header-banner.png') }}" alt=""
+							 style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.85; z-index: 0;" />
+						<div class="inner" style="position: relative !important; z-index: 1; align-items: flex-start !important; padding-top: 10px !important; height: auto !important;">
 							<!-- Logo -->
-								<a href="{{ url_for('index') }}" class="logo">
-									<img src="{{ url_for('static', filename='images/lablogbook-logo1.svg') }}" alt="LabLogbook" style="height: 60px; width: auto;" />
+								<a href="{{ url_for('index') }}" class="logo" style="margin-left: 12px !important; margin-top: 0 !important; background: rgba(255,255,255,0.8); backdrop-filter: blur(3px); padding: 0.08em 0.3em; border-radius: 10px; box-shadow: 0 18px 40px rgba(0,0,0,0.4), 0 6px 14px rgba(0,0,0,0.28);">
+									<img src="{{ url_for('static', filename='images/lablogbook-logo1.svg') }}" alt="LabLogbook" style="height: 150px; width: auto;" />
 								</a>
 							<!-- Nav -->
 								<nav>
@@ -36,56 +53,63 @@
 						<h2>Menu</h2>
 						<ul>
 							<li><a href="{{ url_for('index') }}">Home</a></li>
-							<li><a href="generic.html">My experiments</a></li>
-							<li><a href="generic.html">Characterizations</a></li>
-							<li><a href="generic.html">Miscellaneous</a></li>
-							<li><a href="elements.html">Elements</a></li>
+							<li><a href="{{ url_for('profile') }}">My profile</a></li>
+							<li><a href="{{ url_for('experiments') }}">Experiments</a></li>
+							<li><a href="{{ url_for('characterizations') }}">Characterizations</a></li>
+							<li><a href="{{ url_for('data_interpretation') }}">Data interpretation</a></li>
+							<li><a href="{{ url_for('miscellaneous') }}">Research Papers</a></li>
+							<li><a href="{{ url_for('elements') }}">Elements</a></li>
 						</ul>
 					</nav>
 				<!-- Main -->
-					<div id="main">
-						<div class="inner">
+					<div id="main" style="padding-top: 0;">
+						<div class="inner" style="padding-top: 2em;">
 							{% block content %}{% endblock %}
 						</div>
 					</div>
 				<!-- Footer -->
 					<footer id="footer">
 						<div class="inner">
-							<section>
-								<h2>Get in touch</h2>
-								<form method="post" action="#">
-									<div class="fields">
-										<div class="field half">
-											<input type="text" name="name" id="name" placeholder="Name" />
-										</div>
-										<div class="field half">
-											<input type="email" name="email" id="email" placeholder="Email" />
-										</div>
-										<div class="field">
-											<textarea name="message" id="message" placeholder="Message"></textarea>
-										</div>
-									</div>
-									<ul class="actions">
-										<li><input type="submit" value="Send" class="primary" /></li>
+							{% block footer %}
+							<div class="ftr-grid">
+								<div class="ftr-col">
+									<h2>Quick navigation</h2>
+									<ul class="ftr-links">
+										<li><a href="{{ url_for('index') }}">Home</a></li>
+										<li><a href="{{ url_for('experiments') }}">Experiments</a></li>
+										<li><a href="{{ url_for('characterizations') }}">Characterizations</a></li>
+										<li><a href="{{ url_for('miscellaneous') }}">Miscellaneous</a></li>
+										<li><a href="{{ url_for('data_interpretation') }}">Data Interpretation</a></li>
 									</ul>
-								</form>
-							</section>
-							<section>
-								<h2>Follow</h2>
-								<ul class="icons">
-									<li><a href="#" class="icon brands style2 fa-twitter"><span class="label">Twitter</span></a></li>
-									<li><a href="#" class="icon brands style2 fa-facebook-f"><span class="label">Facebook</span></a></li>
-									<li><a href="#" class="icon brands style2 fa-instagram"><span class="label">Instagram</span></a></li>
-									<li><a href="#" class="icon brands style2 fa-dribbble"><span class="label">Dribbble</span></a></li>
-									<li><a href="#" class="icon brands style2 fa-github"><span class="label">GitHub</span></a></li>
-									<li><a href="#" class="icon brands style2 fa-500px"><span class="label">500px</span></a></li>
-									<li><a href="#" class="icon solid style2 fa-phone"><span class="label">Phone</span></a></li>
-									<li><a href="#" class="icon solid style2 fa-envelope"><span class="label">Email</span></a></li>
-								</ul>
-							</section>
-							<ul class="copyright">
-								<li>&copy; Untitled. All rights reserved</li><li>Design: <a href="http://html5up.net">HTML5 UP</a></li>
+								</div>
+								<div class="ftr-col">
+									<h2>Resources</h2>
+									<ul class="ftr-links">
+										<li><a href="{{ url_for('docs') }}">Documentation / user guide</a></li>
+										<li><a href="{{ url_for('shortcuts') }}">Keyboard shortcuts &amp; tips</a></li>
+										<li><a href="{{ url_for('feedback') }}">Report a bug / feedback</a></li>
+									</ul>
+								</div>
+								<div class="ftr-col">
+									<h2>Data &amp; compliance</h2>
+									<ul class="ftr-links">
+										<li><a href="{{ url_for('data_privacy') }}#retention">Data retention &amp; backup policy</a></li>
+										<li><a href="{{ url_for('export_data') }}">Export / download all my data</a></li>
+										<li><a href="{{ url_for('data_privacy') }}#privacy">Privacy note</a></li>
+									</ul>
+								</div>
+								<div class="ftr-col">
+									<h2>About</h2>
+									<p class="ftr-about-text">
+										Version {{ app_version }} &middot; updated {{ app_last_updated }}<br />
+										Built and maintained by the LabLogbook team.
+									</p>
+								</div>
+							</div>
+							<ul class="copyright ftr-copyright">
+								<li>&copy; {{ current_year }} LabLogbook. All rights reserved.</li>
 							</ul>
+							{% endblock %}
 						</div>
 					</footer>
 			</div>

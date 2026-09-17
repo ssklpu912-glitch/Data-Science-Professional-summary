@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Configure Plot — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>Configure Plot</h1>
+	<p>{{ data_file.label or data_file.original_filename }}</p>
+	<p><a href="{{ url_for('data_interpretation') }}">← Back to Data Interpretation</a></p>
+</header>
+
+{% if error %}
+<div style="max-width: 700px; margin: 0 auto 1.5em auto; background: #fdecea; color: #b3261e; padding: 0.8em 1.2em; border-radius: 8px;">
+	{{ error }}
+</div>
+{% endif %}
+
+<div style="max-width: 700px; margin: 0 auto 1.5em auto; background: #fff8e1; border-radius: 10px; padding: 1.5em;">
+	<p style="margin: 0 0 1em 0; font-size: 0.9em; color: #6b5a00;">If the columns/preview below look wrong (e.g. everything squashed into one column, or the wrong row used as headers), adjust these and the preview will update automatically.</p>
+	<form method="GET" style="display: flex; gap: 1em; align-items: flex-end; flex-wrap: wrap;">
+		<div class="field" style="margin: 0;">
+			<label for="delimiter">Delimiter</label>
+			<select id="delimiter" name="delimiter" onchange="this.form.submit()">
+				<option value="auto" {% if delim_choice == 'auto' %}selected{% endif %}>Auto-detect</option>
+				<option value="comma" {% if delim_choice == 'comma' %}selected{% endif %}>Comma ( , )</option>
+				<option value="semicolon" {% if delim_choice == 'semicolon' %}selected{% endif %}>Semicolon ( ; )</option>
+				<option value="tab" {% if delim_choice == 'tab' %}selected{% endif %}>Tab</option>
+				<option value="whitespace" {% if delim_choice == 'whitespace' %}selected{% endif %}>Whitespace</option>
+			</select>
+		</div>
+		<div class="field" style="margin: 0;">
+			<label for="header_row">Header row (0 = first line, blank = auto)</label>
+			<input type="number" id="header_row" name="header_row" min="0" value="{{ header_row_str }}" style="width: 100px;" />
+		</div>
+		<div class="field" style="margin: 0;">
+			<input type="submit" value="Update preview" class="button" />
+		</div>
+	</form>
+</div>
+
+{% if preview %}
+<div style="max-width: 700px; margin: 0 auto 1.5em auto; overflow-x: auto;">
+	<p style="font-size: 0.85em; color: #888; margin-bottom: 0.4em;">Preview (first 5 rows) — check the column names and values look right:</p>
+	<table style="width: 100%; border-collapse: collapse; font-size: 0.85em;">
+		<thead>
+			<tr>
+				{% for col in columns %}
+				<th style="text-align: left; padding: 0.4em 0.6em; border-bottom: 2px solid #ccc; background: #f0f0f0;">{{ col }}</th>
+				{% endfor %}
+			</tr>
+		</thead>
+		<tbody>
+			{% for row in preview %}
+			<tr>
+				{% for col in columns %}
+				<td style="padding: 0.4em 0.6em; border-bottom: 1px solid #eee;">{{ row[col] }}</td>
+				{% endfor %}
+			</tr>
+			{% endfor %}
+		</tbody>
+	</table>
+</div>
+{% endif %}
+
+{% if columns %}
+<div style="max-width: 700px; margin: 0 auto; background: #f7f7f7; border-radius: 10px; padding: 2em;">
+	<form method="POST">
+		<input type="hidden" name="delimiter" value="{{ delim_choice }}" />
+		<input type="hidden" name="header_row" value="{{ header_row_str }}" />
+		<div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.2em; margin-bottom: 1.2em;">
+			<div class="field">
+				<label for="x_column">X column</label>
+				<select id="x_column" name="x_column" required>
+					{% for col in columns %}
+					<option value="{{ col }}" {% if data_file.x_column == col %}selected{% endif %}>{{ col }}</option>
+					{% endfor %}
+				</select>
+			</div>
+			<div class="field">
+				<label for="y_column">Y column</label>
+				<select id="y_column" name="y_column" required>
+					{% for col in columns %}
+					<option value="{{ col }}" {% if data_file.y_column == col %}selected{% endif %}>{{ col }}</option>
+					{% endfor %}
+				</select>
+			</div>
+		</div>
+		<div class="field">
+			<label for="fit_type">Fit type</label>
+			<select id="fit_type" name="fit_type">
+				<option value="none" {% if data_file.fit_type == 'none' %}selected{% endif %}>No fit — just plot the data</option>
+				<option value="linear" {% if data_file.fit_type == 'linear' %}selected{% endif %}>Linear (y = mx + c)</option>
+				<option value="quadratic" {% if data_file.fit_type == 'quadratic' %}selected{% endif %}>Quadratic (y = ax² + bx + c)</option>
+				<option value="exponential" {% if data_file.fit_type == 'exponential' %}selected{% endif %}>Exponential (y = a·e^(bx) + c)</option>
+				<option value="gaussian" {% if data_file.fit_type == 'gaussian' %}selected{% endif %}>Gaussian (peak fit)</option>
+			</select>
+		</div>
+		<ul class="actions">
+			<li><input type="submit" value="Generate plot" class="primary" /></li>
+		</ul>
+	</form>
+</div>
+{% else %}
+	<p style="text-align: center;">Couldn't read columns from this file.</p>
+{% endif %}
+{% endblock %}

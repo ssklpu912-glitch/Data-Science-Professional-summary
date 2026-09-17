@@ -183,3 +183,62 @@
 			});
 
 })(jQuery);
+/* Lightweight replacement for window.confirm(), which some embedded/sandboxed
+   preview browsers suppress (silently returning false, so the destructive
+   action never fires). Turns the trigger element into an inline
+   "Click again to confirm" prompt for a few seconds instead of relying on a
+   native dialog. Usage:
+     - onsubmit="return appConfirm(this.querySelector('[type=submit],button'), 'Delete this?');"
+     - onclick="if (!appConfirm(this, 'Delete this?')) return; doTheThing();"
+*/
+function appConfirm(el, message) {
+	if (!el) return window.confirm(message);
+	if (el.dataset.confirmArmed === '1') {
+		delete el.dataset.confirmArmed;
+		if (el._appConfirmTimeout) clearTimeout(el._appConfirmTimeout);
+		if (el._appConfirmOriginal !== undefined) {
+			if ('value' in el) el.value = el._appConfirmOriginal;
+			else el.textContent = el._appConfirmOriginal;
+		}
+		el.style.color = '';
+		return true;
+	}
+	el.dataset.confirmArmed = '1';
+	el._appConfirmOriginal = ('value' in el && el.tagName !== 'BUTTON') ? el.value : el.textContent;
+	var prompt = 'Click again to confirm';
+	if ('value' in el && el.tagName !== 'BUTTON') el.value = prompt;
+	else el.textContent = prompt;
+	el.style.color = '#b3261e';
+	el._appConfirmTimeout = setTimeout(function () {
+		delete el.dataset.confirmArmed;
+		if ('value' in el && el.tagName !== 'BUTTON') el.value = el._appConfirmOriginal;
+		else el.textContent = el._appConfirmOriginal;
+		el.style.color = '';
+	}, 5000);
+	return false;
+}
+
+/* CSRF protection: Flask-WTF's CSRFProtect checks every POST/PUT/PATCH/DELETE
+   request for a 'csrf_token' field matching the session. The token itself is
+   published once per page load via <meta name="csrf-token">. */
+function getCsrfToken() {
+	var meta = document.querySelector('meta[name="csrf-token"]');
+	return meta ? meta.getAttribute('content') : '';
+}
+
+function addCsrfToken(form) {
+	if (form.querySelector('input[name="csrf_token"]')) return;
+	var input = document.createElement('input');
+	input.type = 'hidden';
+	input.name = 'csrf_token';
+	input.value = getCsrfToken();
+	form.appendChild(input);
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+	var forms = document.querySelectorAll('form');
+	for (var i = 0; i < forms.length; i++) {
+		var method = (forms[i].getAttribute('method') || 'GET').toUpperCase();
+		if (method === 'POST') addCsrfToken(forms[i]);
+	}
+});

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}{{ data_file.label or data_file.original_filename }} — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>{{ data_file.label or data_file.original_filename }}</h1>
+	<p>Uploaded {{ data_file.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</p>
+	<p><a href="{{ url_for('data_interpretation_workspace') }}">← Back to Data Interpretation</a></p>
+</header>
+
+<div style="max-width: 900px; margin: 0 auto;">
+	{% if data_file.file_type == 'image' %}
+		<img src="{{ url_for('static', filename='uploads/' + (data_file.preview_filename or data_file.stored_filename)) }}" alt="{{ data_file.label or data_file.original_filename }}" style="max-width: 100%; border-radius: 8px; border: 1px solid #ddd;" />
+	{% elif data_file.plot_filename %}
+		<img src="{{ url_for('static', filename='uploads/' + data_file.plot_filename) }}" alt="Plot" style="max-width: 100%; border-radius: 8px; border: 1px solid #ddd;" />
+
+		<div style="margin-top: 1.5em; background: #f7f7f7; border-radius: 10px; padding: 1.5em;">
+			<p><strong>X:</strong> {{ data_file.x_column }} &nbsp;&nbsp; <strong>Y:</strong> {{ data_file.y_column }}</p>
+			{% if data_file.fit_type and data_file.fit_type != 'none' %}
+				<p><strong>Fit:</strong> {{ data_file.fit_type | capitalize }}
+					{% if data_file.r_squared is not none %} — R² = {{ '%.4f' % data_file.r_squared }}{% endif %}
+				</p>
+				{% if fit_params %}
+				<ul>
+					{% for name, value in fit_params %}
+					<li><strong>{{ name }}:</strong> {{ value }}</li>
+					{% endfor %}
+				</ul>
+				{% else %}
+					<p style="color: #888;">Fit could not converge for this data — try a different fit type.</p>
+				{% endif %}
+			{% else %}
+				<p style="color: #888;">No curve fit applied — data plotted as-is.</p>
+			{% endif %}
+			<a href="{{ url_for('configure_data_file', file_id=data_file.id) }}" class="button" style="margin-top: 0.5em; display: inline-block;">Re-configure plot</a>
+		</div>
+
+		{% if analysis %}
+		<div style="margin-top: 1em; background: #eef6ee; border-left: 4px solid #4caf50; padding: 1em 1.5em; border-radius: 6px;">
+			<strong>Analysis:</strong> {{ analysis }}
+		</div>
+		{% endif %}
+	{% else %}
+		<p>This file hasn't been configured yet.</p>
+		<a href="{{ url_for('configure_data_file', file_id=data_file.id) }}" class="button">Configure plot</a>
+	{% endif %}
+</div>
+{% endblock %}

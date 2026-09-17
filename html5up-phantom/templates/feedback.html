@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Report a bug / feedback — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>Report a bug / feedback</h1>
+	<p>Found something broken, confusing, or missing? Tell us — this tool is under active development.</p>
+</header>
+
+<div style="max-width: 640px; margin: 0 auto;">
+	{% if submitted %}
+	<div class="fb-success">
+		<h2 style="margin-top:0;">Thanks — got it.</h2>
+		<p>Your report has been logged. If you left an email, we may follow up if we need more detail.</p>
+		<a href="{{ url_for('feedback') }}" class="button">Submit another</a>
+	</div>
+	{% else %}
+	<form method="POST" action="{{ url_for('feedback') }}" class="fb-form">
+		<div class="field">
+			<label for="fb-category">Type</label>
+			<select id="fb-category" name="category">
+				<option value="bug">Bug report</option>
+				<option value="feedback">Feedback / suggestion</option>
+			</select>
+		</div>
+		<div class="field">
+			<label for="fb-message">What happened, or what would help?</label>
+			<textarea id="fb-message" name="message" rows="6" placeholder="Be as specific as you can — what page you were on, what you expected, what happened instead." required></textarea>
+		</div>
+		<div class="field">
+			<label for="fb-email">Your email (optional, in case we need to follow up)</label>
+			<input type="email" id="fb-email" name="email" placeholder="you@example.com" />
+		</div>
+		<div class="field">
+			<label for="fb-page">Page this is about (optional)</label>
+			<input type="text" id="fb-page" name="page_url" placeholder="e.g. Elements &gt; Protocol & SOP Repository" />
+		</div>
+		<button type="submit" class="button primary">Send report</button>
+	</form>
+	{% endif %}
+</div>
+
+<style>
+	.fb-form .field { margin-bottom: 1.2em; }
+	.fb-success { background: #eaf4ea; border-radius: 12px; padding: 1.8em 2em; text-align: center; }
+	.fb-success p { color: #3f4f3f; }
+</style>
+{% endblock %}

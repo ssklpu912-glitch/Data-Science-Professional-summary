@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Documentation — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>Documentation</h1>
+	<p>A short guide to each part of LabLogbook.</p>
+</header>
+
+<div class="doc-wrap">
+	<div class="doc-card">
+		<h2>Experiments</h2>
+		<p>Log a new experiment from the <a href="{{ url_for('experiments') }}">Experiments</a> page: date/time, title, type, status, objective, materials, procedure, input parameters, output/results, observations, and conclusion. Past entries appear below the form — pick any two to compare side by side, and LabLogbook will point out what changed between them (status, input parameters, output).</p>
+	</div>
+
+	<div class="doc-card">
+		<h2>Characterizations &amp; Data Interpretation</h2>
+		<p>Under <a href="{{ url_for('data_interpretation') }}">Data Interpretation</a>, pick a technique category (Spectroscopy, Microscopy &amp; Imaging, etc.), then a specific technique to open its workspace. Each technique workspace is organized into tabs down the left side:</p>
+		<ul>
+			<li><strong>Select data</strong> — upload or choose the files you're working with for this technique.</li>
+			<li><strong>Technique-specific tabs</strong> (e.g. Topography, Mechanical, SAED for AFM/TEM) — measure, fit, and annotate the selected data.</li>
+			<li><strong>Analysis</strong> — review everything you've measured for the current file selection.</li>
+		</ul>
+		<p>General plotting/formatting of tabular or image data (without a specific technique workflow) lives under Characterizations &rarr; Data Interpretation Workspace: select files, plot, format, take a derivative, then analyze.</p>
+	</div>
+
+	<div class="doc-card">
+		<h2>Research Papers</h2>
+		<p>Use <a href="{{ url_for('search_papers') }}">Search Papers</a> to look up literature by topic (Semantic Scholar, CrossRef, and arXiv). For any result, <strong>Add to log</strong> saves it straight to your collection, or <strong>Analyze / Summarize</strong> pulls out key points from the abstract (and the open-access PDF, when one exists) before you save it. Everything you've saved is listed on the <a href="{{ url_for('miscellaneous') }}">Miscellaneous</a> (Research Papers) page, grouped by journal.</p>
+	</div>
+
+	<div class="doc-card">
+		<h2>Elements — Protocols &amp; Projects</h2>
+		<p>The <a href="{{ url_for('elements') }}">Elements</a> page has two tabs:</p>
+		<ul>
+			<li><strong>Protocol &amp; SOP Repository</strong> — write a reusable procedure once, then create new versions as it evolves (each version keeps its own change note and full step list) or clone it for a specific experiment.</li>
+			<li><strong>Project &amp; Task Management</strong> — track a project's timeline, grant/funding period, and milestones/deliverables, plus a to-do list that can optionally link a task to a specific experiment.</li>
+		</ul>
+	</div>
+
+	<div class="doc-card">
+		<h2>Your data</h2>
+		<p>See <a href="{{ url_for('data_privacy') }}">Data &amp; Privacy</a> for where everything is stored and how to export it.</p>
+	</div>
+</div>
+
+<style>
+	.doc-wrap { max-width: 800px; margin: 0 auto; display: flex; flex-direction: column; gap: 1.2em; }
+	.doc-card { background: #f7f7f7; border-radius: 12px; padding: 1.6em 1.8em; }
+	.doc-card h2 { margin: 0 0 0.6em 0; font-size: 1.05em; color: #2a6f2a; }
+	.doc-card p { margin: 0 0 0.8em 0; color: #444; line-height: 1.7; }
+	.doc-card p:last-child { margin-bottom: 0; }
+	.doc-card ul { margin: 0 0 0.8em 0; padding-left: 1.3em; color: #444; line-height: 1.7; }
+	.doc-card ul:last-child { margin-bottom: 0; }
+</style>
+{% endblock %}

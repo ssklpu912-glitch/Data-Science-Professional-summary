@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Data Interpretation — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>Data Interpretation</h1>
+	<p>Choose a technique category, then a specific technique, to get started.</p>
+</header>
+
+<div style="display: flex; gap: 2em; align-items: flex-start; max-width: 1100px; margin: 0 auto;">
+
+	<!-- Vertical sidebar: 7 technique categories, built as a table to avoid any div/flex CSS conflicts -->
+	<table class="ws-tabs" style="flex: 0 0 220px;" cellpadding="0" cellspacing="0">
+		<tbody>
+		{% for cat_name, cat_techniques in categories %}
+		<tr>
+			<td class="{{ 'active' if cat_name == active_category else '' }}">
+				<a href="{{ url_for('data_interpretation', category=cat_name) }}">
+					{{ cat_name }}
+				</a>
+			</td>
+		</tr>
+		{% endfor %}
+		</tbody>
+	</table>
+
+	<!-- Main content: technique dropdown for the active category -->
+	<div style="flex: 1; min-width: 0;">
+		<h2 style="margin-top: 0;">{{ active_category }}</h2>
+
+		<div style="background: #f7f7f7; border-radius: 10px; padding: 1.5em; max-width: 500px;">
+			<div class="field">
+				<label for="technique">Technique</label>
+				<div style="display: flex; gap: 0.8em;">
+					<select id="technique" name="technique" onchange="goToTechnique(this.value)" style="flex: 1;">
+						{% for t in techniques %}
+						<option value="{{ technique_slugs[t] }}" {% if t == active_technique %}selected{% endif %}>{{ t }}</option>
+						{% endfor %}
+					</select>
+					<button type="button" class="primary" onclick="goToTechnique(document.getElementById('technique').value)">Go</button>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
+
+<script>
+	function goToTechnique(slug) {
+		window.location.href = '/characterizations/data/technique/' + slug;
+	}
+</script>
+{% endblock %}

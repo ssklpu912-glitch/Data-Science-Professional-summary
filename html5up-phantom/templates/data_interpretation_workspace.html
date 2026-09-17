@@ -1,0 +1,396 @@
+{% extends "base.html" %}
+{% block title %}Data Interpretation — LabLogbook{% endblock %}
+{% block content %}
+<style>
+	input[type="checkbox"] {
+		appearance: auto !important;
+		-webkit-appearance: checkbox !important;
+		width: 16px !important;
+		height: 16px !important;
+		display: inline-block !important;
+		float: none !important;
+		position: static !important;
+		opacity: 1 !important;
+		margin: 0 0.5em 0 0 !important;
+		padding: 0 !important;
+		background: none !important;
+		border: 1px solid #999 !important;
+		z-index: auto !important;
+	}
+	/* Phantom caps the content wrapper at 68em regardless of our own width settings —
+	   override it just for this page so the 3-column layout can use the full viewport. */
+	#main > .inner {
+		max-width: 100% !important;
+		padding: 0 2rem !important;
+	}
+</style>
+<header>
+	<h1>Data Interpretation</h1>
+	<p><a href="{{ url_for('data_interpretation') }}">← Back to technique categories</a></p>
+</header>
+
+{% if error %}
+<div style="max-width: 96%; margin: 0 auto 1.5em auto; padding: 0.8em 1.2em; background: #fdecea; color: #b3261e; border-radius: 8px;">
+	{{ error }}
+</div>
+{% endif %}
+
+<div id="workspace-anchor"></div>
+<div style="display: flex; gap: 2em; align-items: flex-start; max-width: 96%; margin: 0 auto; padding: 0 1em;">
+
+	<table class="ws-tabs" style="flex: 0 0 190px;" cellpadding="0" cellspacing="0">
+		<tbody>
+		<tr><td class="{{ 'active' if tab == 'select' else '' }}">
+			<a href="{{ url_for('data_interpretation_workspace', tab='select') }}">📁 Select files</a>
+		</td></tr>
+		<tr><td class="{{ 'active' if tab == 'plot' else '' }}">
+			<a href="{{ url_for('data_interpretation_workspace', tab='plot') }}">📈 Plot</a>
+		</td></tr>
+		<tr><td class="{{ 'active' if tab == 'format' else '' }}">
+			<a href="{{ url_for('data_interpretation_workspace', tab='format') }}">🎨 Format</a>
+		</td></tr>
+		<tr><td class="{{ 'active' if tab == 'derivative' else '' }}">
+			<a href="{{ url_for('data_interpretation_workspace', tab='derivative') }}">∂ Derivative</a>
+		</td></tr>
+		<tr><td class="{{ 'active' if tab == 'analysis' else '' }}">
+			<a href="{{ url_for('data_interpretation_workspace', tab='analysis') }}">📊 Analysis</a>
+		</td></tr>
+		<tr><td style="padding: 0.4em 0 0 0 !important; background: none !important;">
+			<form method="POST" action="{{ url_for('dp_reset') }}" onsubmit="return appConfirm(this.querySelector('[type=submit]'), 'Clear the current file selection and plot?');">
+				<button type="submit" style="display: block; width: 100%; text-align: left; padding: 0.8em 1.1em; background: none; border: none; border-top: 1px solid #ddd; color: #999; cursor: pointer; font-size: 0.85em; height: auto; line-height: normal; letter-spacing: normal; text-transform: none; box-shadow: none; border-radius: 0; font-weight: normal;">↺ Reset</button>
+			</form>
+		</td></tr>
+		</tbody>
+	</table>
+
+	<div style="flex: 1; min-width: 0;">
+
+		{% if tab == 'select' %}
+		<h2 style="margin-top:0; font-size: 1.3em;">Select files</h2>
+		<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+			<form method="POST" action="{{ url_for('upload_data_file') }}" enctype="multipart/form-data">
+				<div class="field">
+					<label for="data_file">Import new file(s)</label>
+					<input type="file" id="data_file" name="data_file" multiple />
+				</div>
+				<div class="field">
+					<label for="label">Label (optional)</label>
+					<input type="text" id="label" name="label" placeholder="e.g. TEM — Sample 3" />
+				</div>
+				<ul class="actions"><li><input type="submit" value="Import" class="button" /></li></ul>
+			</form>
+		</div>
+
+		{% if all_files %}
+		<form method="POST" action="{{ url_for('dp_select_files') }}">
+			<div style="max-height: 380px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 0.8em; margin-bottom: 1em;">
+				{% for f in all_files %}
+				<div class="dp-file-row" data-file-id="{{ f.id }}"
+					 onclick="toggleDpFile({{ f.id }})"
+					 style="display: flex; align-items: center; gap: 0.6em; padding: 0.5em 0.3em; border-bottom: 1px solid #eee; cursor: pointer; user-select: none; border-radius: 6px; font-size: 0.9em; {% if f.id in state.file_ids %}background: #eaeaea;{% endif %}">
+					<span id="dp-box-{{ f.id }}"
+						  style="display: inline-block; width: 16px; height: 16px; min-width: 16px; border: 2px solid {% if f.id in state.file_ids %}#333{% else %}#999{% endif %}; border-radius: 4px; background: {% if f.id in state.file_ids %}#333{% else %}#fff{% endif %}; position: relative;">
+						{% if f.id in state.file_ids %}<span style="position:absolute; left:2px; top:-2px; color:#fff; font-size:12px; line-height:1;">✓</span>{% endif %}
+					</span>
+					<span style="flex: 1;"><strong>{{ f.label or f.original_filename }}</strong> <span style="color:#888; font-size:0.85em;">{{ f.uploaded_at.strftime('%Y-%m-%d') }}</span></span>
+					<button type="button" onclick="event.stopPropagation(); deleteDpFile({{ f.id }}, this);" title="Remove this file"
+							style="background: none; border: none; color: #b3261e; cursor: pointer; font-size: 1em; padding: 0.2em 0.5em;">✕</button>
+					<input type="checkbox" name="file_ids" value="{{ f.id }}" id="dp-cb-{{ f.id }}"
+						   {% if f.id in state.file_ids %}checked{% endif %}
+						   style="display: none !important; pointer-events: none !important; position: absolute; opacity: 0; width: 0; height: 0;" tabindex="-1" />
+				</div>
+				{% endfor %}
+			</div>
+			<ul class="actions"><li><input type="submit" value="Use selected files →" class="primary" /></li></ul>
+		</form>
+
+		<script>
+			function toggleDpFile(fileId) {
+				var cb = document.getElementById('dp-cb-' + fileId);
+				var box = document.getElementById('dp-box-' + fileId);
+				var row = document.querySelector('.dp-file-row[data-file-id="' + fileId + '"]');
+				cb.checked = !cb.checked;
+				if (cb.checked) {
+					box.style.background = '#333'; box.style.borderColor = '#333';
+					box.innerHTML = '<span style="position:absolute; left:2px; top:-2px; color:#fff; font-size:12px; line-height:1;">✓</span>';
+					row.style.background = '#eaeaea';
+				} else {
+					box.style.background = '#fff'; box.style.borderColor = '#999';
+					box.innerHTML = ''; row.style.background = 'transparent';
+				}
+			}
+			function deleteDpFile(fileId, btn) {
+				if (!appConfirm(btn, 'Delete this file?')) return;
+				var form = document.createElement('form');
+				form.method = 'POST';
+				form.action = '/characterizations/data/' + fileId + '/delete';
+				addCsrfToken(form);
+				document.body.appendChild(form);
+				form.submit();
+			}
+		</script>
+		{% else %}
+			<p style="color: #888; font-size: 0.9em;">No files imported yet.</p>
+		{% endif %}
+
+		{% elif tab == 'plot' %}
+		<h2 style="margin-top:0; font-size: 1.3em;">Plot</h2>
+		{% if not selected_files %}
+			<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+		{% else %}
+		<form method="POST" action="{{ url_for('dp_set_plot_type') }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em;">
+			<div class="field">
+				<label for="plot_type">Plot type</label>
+				<select id="plot_type" name="plot_type">
+					<optgroup label="Comparison">
+						<option value="bar_column" {% if state.plot_type == 'bar_column' %}selected{% endif %}>Bar / Column</option>
+						<option value="box_violin" {% if state.plot_type == 'box_violin' %}selected{% endif %}>Box &amp; Violin</option>
+					</optgroup>
+					<optgroup label="Relationship / Trend">
+						<option value="scatter_plot" {% if state.plot_type == 'scatter_plot' %}selected{% endif %}>Scatter Plot</option>
+						<option value="line_timeseries" {% if state.plot_type == 'line_timeseries' %}selected{% endif %}>Line / Time-series</option>
+						<option value="bubble_pca" {% if state.plot_type == 'bubble_pca' %}selected{% endif %}>Bubble / PCA</option>
+					</optgroup>
+					<optgroup label="Distribution / Pattern">
+						<option value="heatmap" {% if state.plot_type == 'heatmap' %}selected{% endif %}>Heatmap</option>
+						<option value="histogram_density" {% if state.plot_type == 'histogram_density' %}selected{% endif %}>Histogram / Density</option>
+					</optgroup>
+					<optgroup label="Omics / Clinical">
+						<option value="volcano_plot" {% if state.plot_type == 'volcano_plot' %}selected{% endif %}>Volcano Plot</option>
+						<option value="survival_curve" {% if state.plot_type == 'survival_curve' %}selected{% endif %}>Survival Curve</option>
+						<option value="forest_plot" {% if state.plot_type == 'forest_plot' %}selected{% endif %}>Forest Plot</option>
+						<option value="waterfall_chart" {% if state.plot_type == 'waterfall_chart' %}selected{% endif %}>Waterfall Chart</option>
+					</optgroup>
+					<optgroup label="Flow">
+						<option value="sankey_alluvial" {% if state.plot_type == 'sankey_alluvial' %}selected{% endif %}>Sankey / Alluvial</option>
+					</optgroup>
+				</select>
+			</div>
+
+			<h3 style="margin: 1em 0 0.5em 0; font-size: 1em;">Multi-column data</h3>
+			<div onclick="toggleWideMode()" style="display: flex; align-items: center; gap: 0.6em; cursor: pointer; user-select: none; font-size: 0.9em;">
+					<span id="wide-mode-box" style="display: inline-block; width: 16px; height: 16px; min-width: 16px; border: 2px solid {% if state.wide_mode %}#333{% else %}#999{% endif %}; border-radius: 4px; background: {% if state.wide_mode %}#333{% else %}#fff{% endif %}; position: relative;">
+						{% if state.wide_mode %}<span style="position:absolute; left:2px; top:-2px; color:#fff; font-size:12px; line-height:1;">✓</span>{% endif %}
+					</span>
+					<span>Plot all columns as separate series</span>
+					<input type="checkbox" name="wide_mode" id="wide-mode-cb" {% if state.wide_mode %}checked{% endif %}
+						   style="display: none !important; pointer-events: none !important; position: absolute; opacity: 0; width: 0; height: 0;" tabindex="-1" />
+				</div>
+				<script>
+					function toggleWideMode() {
+						var cb = document.getElementById('wide-mode-cb');
+						var box = document.getElementById('wide-mode-box');
+						cb.checked = !cb.checked;
+						if (cb.checked) {
+							box.style.background = '#333'; box.style.borderColor = '#333';
+							box.innerHTML = '<span style="position:absolute; left:2px; top:-2px; color:#fff; font-size:12px; line-height:1;">✓</span>';
+						} else {
+							box.style.background = '#fff'; box.style.borderColor = '#999';
+							box.innerHTML = '';
+						}
+					}
+				</script>
+			<p style="font-size: 0.8em; color: #888; margin: 0.4em 0 0 0;">For matrix-style files (e.g. fluorescence EEM: one X column + many Y columns). Uses the first column as X and plots every other column as its own series.</p>
+
+			<ul class="actions"><li><input type="submit" value="Plot" class="primary" /></li></ul>
+		</form>
+		{% if plot_errors %}
+		<div style="background: #fdecea; color: #b3261e; padding: 0.7em 1em; border-radius: 8px; margin-top: 1em; font-size: 0.85em;">
+			{% for e in plot_errors %}<div>{{ e }}</div>{% endfor %}
+		</div>
+		{% endif %}
+		{% endif %}
+
+		{% elif tab == 'format' %}
+		<h2 style="margin-top:0; font-size: 1.3em;">Format</h2>
+		{% if not selected_files %}
+			<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+		{% else %}
+		<form method="POST" action="{{ url_for('dp_set_format') }}">
+			<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
+				<h3 style="margin-top:0; font-size: 1em;">Color palette</h3>
+				<div class="field">
+					<label for="colormap">Color map</label>
+					<select id="colormap" name="colormap">
+						{% for cm in colormap_options %}
+						<option value="{{ cm }}" {% if state.format.colormap == cm %}selected{% endif %}>{{ cm }}</option>
+						{% endfor %}
+					</select>
+				</div>
+			</div>
+
+			<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
+				<h3 style="margin-top:0; font-size: 1em;">Legend</h3>
+				<label style="display: flex; align-items: center; gap: 0.5em; margin-bottom: 0.6em; font-size: 0.9em;"><input type="checkbox" name="legend" {% if state.format.legend %}checked{% endif %} /> Show legend</label>
+				<div class="field">
+					<label for="legend_loc">Position</label>
+					<select id="legend_loc" name="legend_loc">
+						{% for loc in ['best', 'upper right', 'upper left', 'lower right', 'lower left'] %}
+						<option value="{{ loc }}" {% if state.format.legend_loc == loc %}selected{% endif %}>{{ loc | capitalize }}</option>
+						{% endfor %}
+					</select>
+				</div>
+				<div class="field">
+					<label for="legend_orientation">Orientation</label>
+					<select id="legend_orientation" name="legend_orientation">
+						<option value="vertical" {% if state.format.legend_orientation == 'vertical' %}selected{% endif %}>Vertical</option>
+						<option value="horizontal" {% if state.format.legend_orientation == 'horizontal' %}selected{% endif %}>Horizontal</option>
+					</select>
+				</div>
+				<div class="field">
+					<label for="legend_scale">Size (scale)</label>
+					<input type="number" id="legend_scale" name="legend_scale" min="0.4" max="2" step="0.1" value="{{ state.format.legend_scale }}" />
+				</div>
+			</div>
+
+			<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
+				<h3 style="margin-top:0; font-size: 1em;">Lines, ticks &amp; labels</h3>
+				<div class="field">
+					<label for="line_width">Line thickness</label>
+					<input type="number" id="line_width" name="line_width" min="0.5" max="6" step="0.1" value="{{ state.format.line_width }}" />
+				</div>
+				<div class="field">
+					<label for="marker_size">Marker size</label>
+					<input type="number" id="marker_size" name="marker_size" min="4" max="60" step="1" value="{{ state.format.marker_size }}" />
+				</div>
+				<div class="field">
+					<label for="tick_width">Tick thickness</label>
+					<input type="number" id="tick_width" name="tick_width" min="0.5" max="4" step="0.1" value="{{ state.format.tick_width }}" />
+				</div>
+				<div class="field">
+					<label for="label_size">Axis label size</label>
+					<input type="number" id="label_size" name="label_size" min="6" max="24" step="1" value="{{ state.format.label_size }}" />
+				</div>
+				<label style="display: flex; align-items: center; gap: 0.5em; margin-top: 0.6em; font-size: 0.9em;"><input type="checkbox" name="bold_labels" {% if state.format.bold_labels %}checked{% endif %} /> Bold axis labels</label>
+				<label style="display: flex; align-items: center; gap: 0.5em; margin-top: 0.4em; font-size: 0.9em;"><input type="checkbox" name="grid" {% if state.format.grid %}checked{% endif %} /> Show grid</label>
+			</div>
+
+			<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
+				<h3 style="margin-top:0; font-size: 1em;">Axis scaling</h3>
+				<label style="display: flex; align-items: center; gap: 0.5em; font-size: 0.9em;"><input type="checkbox" name="log_x" {% if state.format.log_x %}checked{% endif %} /> Log scale — X axis</label>
+				<label style="display: flex; align-items: center; gap: 0.5em; margin-top: 0.4em; font-size: 0.9em;"><input type="checkbox" name="log_y" {% if state.format.log_y %}checked{% endif %} /> Log scale — Y axis</label>
+
+				<h3 style="margin: 1em 0 0.5em 0; font-size: 1em;">Axis range</h3>
+				<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.8em;">
+					<div class="field" style="margin: 0;">
+						<label for="x_min">X min</label>
+						<input type="number" id="x_min" name="x_min" step="any" value="{{ state.format.x_min if state.format.x_min is not none else '' }}" placeholder="auto" />
+					</div>
+					<div class="field" style="margin: 0;">
+						<label for="x_max">X max</label>
+						<input type="number" id="x_max" name="x_max" step="any" value="{{ state.format.x_max if state.format.x_max is not none else '' }}" placeholder="auto" />
+					</div>
+					<div class="field" style="margin: 0;">
+						<label for="y_min">Y min</label>
+						<input type="number" id="y_min" name="y_min" step="any" value="{{ state.format.y_min if state.format.y_min is not none else '' }}" placeholder="auto" />
+					</div>
+					<div class="field" style="margin: 0;">
+						<label for="y_max">Y max</label>
+						<input type="number" id="y_max" name="y_max" step="any" value="{{ state.format.y_max if state.format.y_max is not none else '' }}" placeholder="auto" />
+					</div>
+				</div>
+				<p style="font-size: 0.8em; color: #888; margin: 0.6em 0 0 0;">Leave blank for auto. Resets automatically when you change file selection.</p>
+			</div>
+
+			<ul class="actions"><li><input type="submit" value="Apply formatting" class="primary" /></li></ul>
+		</form>
+		{% endif %}
+
+		{% elif tab == 'derivative' %}
+		<h2 style="margin-top:0; font-size: 1.3em;">Derivative curves</h2>
+		{% if not selected_files %}
+			<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+		{% else %}
+		<form method="POST" action="{{ url_for('dp_set_derivative') }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em;">
+			<label style="display: flex; align-items: center; gap: 0.6em; font-size: 0.9em;">
+				<input type="checkbox" name="derivative" {% if state.derivative %}checked{% endif %} />
+				Plot dY/dX instead of raw data
+			</label>
+			<p style="font-size: 0.8em; color: #888; margin: 0.6em 0 0 0;">Shaded band is a local-noise estimate, not a true experimental error.</p>
+			<ul class="actions"><li><input type="submit" value="Apply" class="primary" /></li></ul>
+		</form>
+		{% if plot_errors %}
+		<div style="background: #fdecea; color: #b3261e; padding: 0.7em 1em; border-radius: 8px; margin-top: 1em; font-size: 0.85em;">
+			{% for e in plot_errors %}<div>{{ e }}</div>{% endfor %}
+		</div>
+		{% endif %}
+		{% endif %}
+
+		{% elif tab == 'analysis' %}
+		<h2 style="margin-top:0; font-size: 1.3em;">Analysis</h2>
+		{% if not selected_files %}
+			<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+		{% elif not results %}
+			<p style="color: #888; font-size: 0.9em;">No plot generated yet — visit <strong>Plot</strong> first.</p>
+		{% else %}
+			{% if overall_analysis %}
+			<div style="background: #eef6ee; border-left: 4px solid #4caf50; border-radius: 6px; padding: 1em 1.2em; margin-bottom: 1.2em;">
+				<h3 style="margin: 0 0 0.5em 0; font-size: 1em;">Overall interpretation</h3>
+				<p style="margin: 0; font-size: 0.9em;">{{ overall_analysis }}</p>
+			</div>
+			{% endif %}
+			<details>
+				<summary style="cursor: pointer; color: #888; font-size: 0.85em; margin-bottom: 0.6em;">Per-file statistics</summary>
+				<div style="overflow-x: auto;">
+					<table style="width: 100%; border-collapse: collapse; font-size: 0.8em;">
+						<thead><tr>
+							<th style="text-align:left; padding: 0.3em;">File</th><th style="text-align:left; padding: 0.3em;">n</th>
+							<th style="text-align:left; padding: 0.3em;">Mean</th><th style="text-align:left; padding: 0.3em;">Std</th>
+							<th style="text-align:left; padding: 0.3em;">Min</th><th style="text-align:left; padding: 0.3em;">Max</th>
+						</tr></thead>
+						<tbody>
+							{% for r in results %}
+							<tr>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ r.label }}</td>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ r.stats.count }}</td>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ r.stats.mean }}</td>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ r.stats.std }}</td>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ r.stats.min }}</td>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ r.stats.max }}</td>
+							</tr>
+							{% endfor %}
+						</tbody>
+					</table>
+				</div>
+			</details>
+		{% endif %}
+		{% endif %}
+	</div>
+
+	<div style="flex: 1; min-width: 0;">
+		<h2 style="margin-top: 0; font-size: 1.3em;">Plot</h2>
+		{% if plot_filename %}
+			<img src="{{ url_for('static', filename='uploads/' + plot_filename) }}" alt="Plot" style="max-width: 100%; border-radius: 8px; border: 1px solid #ddd;" />
+		{% else %}
+			<div style="background: #f7f7f7; border-radius: 10px; padding: 3em; text-align: center; color: #888;">
+				<p style="margin: 0;">No plot yet. Select files, then go to <strong>Plot</strong> and click Plot.</p>
+			</div>
+		{% endif %}
+	</div>
+</div>
+
+{% if image_files %}
+<div style="max-width: 96%; margin: 3em auto 0 auto; padding: 0 1em;">
+	<h2>Reference images (TEM/SEM)</h2>
+	{% for f in image_files %}
+	<div style="border-bottom: 1px solid #ddd; padding: 1em 0; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5em;">
+		<div>
+			<strong>{{ f.label or f.original_filename }}</strong>
+			<span style="color: #888; margin-left: 0.5em;">{{ f.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</span>
+		</div>
+		<div style="display: flex; gap: 1em;">
+			<a href="{{ url_for('view_data_file', file_id=f.id) }}">View</a>
+			<a href="{{ url_for('measure_particles', file_id=f.id) }}">Measure particles</a>
+			<form method="POST" action="{{ url_for('delete_data_file', file_id=f.id) }}" style="display: inline; margin: 0;" onsubmit="return appConfirm(this.querySelector('[type=submit]'), 'Delete this file?');">
+				<button type="submit" style="background: none; border: none; color: #b3261e; cursor: pointer; padding: 0;">Delete</button>
+			</form>
+		</div>
+	</div>
+	{% endfor %}
+</div>
+{% endif %}
+
+<script>
+	document.getElementById('workspace-anchor').scrollIntoView();
+</script>
+{% endblock %}

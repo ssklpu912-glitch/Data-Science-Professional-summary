@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}{{ info.title }} analysis — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>{{ info.title }} results</h1>
+	<p>{{ data_file.label or data_file.original_filename if data_file else '' }}</p>
+	<p>
+		{% if info.back_slug %}
+			<a href="{{ url_for('technique_workspace', slug=info.back_slug, tab=info.back_tab) }}">← Back to {{ info.back_label }}</a>
+		{% else %}
+			<a href="{{ url_for('data_interpretation_workspace') }}">← Back to {{ info.back_label }}</a>
+		{% endif %}
+	</p>
+</header>
+
+<div style="max-width: 900px; margin: 0 auto;">
+	{% if data_file %}
+	<img src="{{ url_for('static', filename='uploads/' + (data_file.preview_filename or data_file.stored_filename)) }}" alt="{{ data_file.original_filename }}" style="max-width: 100%; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 1.5em;" />
+	{% endif %}
+
+	{% if analysis.histogram_filename %}
+	<img src="{{ url_for('static', filename='uploads/' + analysis.histogram_filename) }}" alt="Distribution" style="max-width: 100%; border-radius: 8px; border: 1px solid #ddd;" />
+	{% endif %}
+
+	<div style="margin-top: 1.5em; background: #f7f7f7; border-radius: 10px; padding: 1.5em;">
+		<p style="margin: 0 0 0.8em 0;"><strong>{{ sizes|length }}</strong> measurement{{ 's' if sizes|length != 1 else '' }}, unit: <strong>{{ analysis.unit }}</strong>{% if analysis.pixel_size_nm %} &nbsp;·&nbsp; {% if analysis.measurement_type == 'saed_spacing' %}calibration constant: {{ '%.4f' % analysis.pixel_size_nm }} nm·px{% else %}scale: {{ '%.4f' % analysis.pixel_size_nm }} nm/px{% endif %}{% endif %}</p>
+		<ul style="columns: 3; font-size: 0.9em;">
+			{% for s in sizes %}
+			<li>#{{ loop.index }}: {{ '%.3f' % s }} {{ analysis.unit }}</li>
+			{% endfor %}
+		</ul>
+	</div>
+
+	{% if spot_angles %}
+	<div style="margin-top: 1em; background: #f7f7f7; border-radius: 10px; padding: 1.5em;">
+		<h3 style="margin-top: 0; font-size: 1em;">Angles between measured spots</h3>
+		<ul style="columns: 2; font-size: 0.9em;">
+			{% for a in spot_angles %}
+			<li>Spot #{{ a.i }} ↔ Spot #{{ a.j }}: {{ '%.1f' % a.degrees }}°</li>
+			{% endfor %}
+		</ul>
+	</div>
+	{% endif %}
+
+	{% if analysis.analysis_text %}
+	<div style="margin-top: 1em; background: #eef6ee; border-left: 4px solid #4caf50; padding: 1em 1.5em; border-radius: 6px;">
+		<strong>Analysis:</strong> {{ analysis.analysis_text }}
+	</div>
+	{% endif %}
+</div>
+{% endblock %}

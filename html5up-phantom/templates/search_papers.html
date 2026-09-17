@@ -1,0 +1,331 @@
+{% extends "base.html" %}
+{% block title %}Search Papers — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>Search Papers</h1>
+	<p>Search by research topic (powered by Semantic Scholar, CrossRef, and arXiv).</p>
+</header>
+
+<div style="max-width: 700px; margin: 0 auto 1em auto;">
+	<form method="GET" style="display: flex; gap: 0.8em; overflow: visible;" autocomplete="off">
+		<div style="position: relative; flex: 1;">
+			<input type="text" name="q" id="search-input" value="{{ query }}" placeholder="e.g. perovskite solar cell stability"
+				   style="width: 100%; box-sizing: border-box; padding: 0.7em 1em; border-radius: 8px; border: 1px solid #ccc;" required />
+			{% if recent_searches %}
+			<div id="recent-dropdown" class="sp-dropdown" hidden>
+				{% for rq in recent_searches %}
+				<div class="sp-dropdown-item" data-value="{{ rq }}">{{ rq }}</div>
+				{% endfor %}
+			</div>
+			{% endif %}
+		</div>
+		<input type="submit" value="Search" class="primary" style="border-radius: 8px; padding: 0.7em 1.4em;" />
+	</form>
+</div>
+
+<script>
+	(function () {
+		var input = document.getElementById('search-input');
+		var dropdown = document.getElementById('recent-dropdown');
+		if (!input || !dropdown) return;
+
+		input.addEventListener('focus', function () { dropdown.hidden = false; });
+		input.addEventListener('click', function () { dropdown.hidden = false; });
+		input.addEventListener('blur', function () {
+			// small delay so a click on an item (mousedown, below) registers before we hide it
+			setTimeout(function () { dropdown.hidden = true; }, 150);
+		});
+
+		dropdown.querySelectorAll('.sp-dropdown-item').forEach(function (item) {
+			item.addEventListener('mousedown', function (e) {
+				e.preventDefault();   // keep focus on the input instead of blurring to the div
+				input.value = item.getAttribute('data-value');
+				dropdown.hidden = true;
+				input.form.submit();
+			});
+		});
+	})();
+</script>
+
+{% if query %}
+<div style="max-width: 700px; margin: 0 auto 2.5em auto; text-align: right;">
+	<a href="https://www.semanticscholar.org/search?q={{ query | urlencode }}&sort=relevance" target="_blank" rel="noopener" style="font-size: 0.9em;">
+		Open full search on semanticscholar.org ↗
+	</a>
+</div>
+{% endif %}
+
+{% if query and not results and not (filter_year or filter_journal or filter_source or min_citations) %}
+	<p style="text-align: center; color: #888;">No results found for "{{ query }}" — try a different phrasing.</p>
+{% endif %}
+
+{% if query and (available_years or available_journals or available_sources) %}
+<div class="sp-filterbar">
+	<form method="GET">
+		<input type="hidden" name="q" value="{{ query }}" />
+		<div class="sp-filter-row">
+			<div class="sp-filter-field">
+				<label for="f-year">Year</label>
+				<select id="f-year" name="year">
+					<option value="">All years</option>
+					{% for y in available_years %}
+					<option value="{{ y }}" {% if filter_year == y|string %}selected{% endif %}>{{ y }}</option>
+					{% endfor %}
+				</select>
+			</div>
+			<div class="sp-filter-field">
+				<label for="f-journal">Journal</label>
+				<select id="f-journal" name="journal">
+					<option value="">All journals</option>
+					{% for j in available_journals %}
+					<option value="{{ j }}" {% if filter_journal == j %}selected{% endif %}>{{ j }}</option>
+					{% endfor %}
+				</select>
+			</div>
+			<div class="sp-filter-field">
+				<label for="f-source" title="CrossRef/arXiv/Semantic Scholar don't expose an article/review/letter type — filtering by source is the closest real signal (arXiv = preprints, CrossRef = published journal articles).">Source</label>
+				<select id="f-source" name="source">
+					<option value="">All sources</option>
+					{% for s in available_sources %}
+					<option value="{{ s }}" {% if filter_source == s %}selected{% endif %}>{{ s }}</option>
+					{% endfor %}
+				</select>
+			</div>
+			<div class="sp-filter-field">
+				<label for="f-citations" title="A real per-journal impact factor isn't available from any free API — citation count is the closest genuine quality signal these sources provide.">Min. citations</label>
+				<input type="number" id="f-citations" name="min_citations" min="0" placeholder="e.g. 50"
+					   value="{{ min_citations if min_citations is not none else '' }}" />
+			</div>
+			<div class="sp-filter-field sp-filter-actions">
+				<input type="submit" value="Apply" class="button small" />
+				{% if filter_year or filter_journal or filter_source or min_citations is not none %}
+				<a href="{{ url_for('search_papers', q=query) }}" class="sp-clear">Clear</a>
+				{% endif %}
+			</div>
+		</div>
+	</form>
+	<p class="sp-filter-note">"Source" stands in for article type and "Min. citations" for impact factor — neither is exposed by the free literature APIs this page uses, so these are the closest real signals available.</p>
+</div>
+{% endif %}
+
+{% if query and not results and (filter_year or filter_journal or filter_source or min_citations is not none) %}
+	<p style="text-align: center; color: #888;">No results match these filters — try widening them.</p>
+{% endif %}
+
+{% if results %}
+<div style="max-width: 900px; margin: 0 auto 0.8em auto; color: #888; font-size: 0.9em;">
+	{{ total_results }} result{{ 's' if total_results != 1 else '' }} for "{{ query }}" — page {{ page }} of {{ total_pages }}
+</div>
+<div style="max-width: 900px; margin: 0 auto;">
+	{% for paper in results %}
+	<div class="paper-card">
+		{% if paper.url %}<a href="{{ paper.url }}" target="_blank" rel="noopener" class="paper-card-link" onclick="return handleExternalOpen(event, this.href);">{% endif %}
+		<h3 class="paper-title">{{ paper.title }}</h3>
+		<p class="paper-meta">
+			{% if paper.authors %}{{ paper.authors[:3] | map(attribute='name') | join(', ') }}{% if paper.authors|length > 3 %} et al.{% endif %}{% endif %}
+			{% if paper.year %} · {{ paper.year }}{% endif %}
+			{% if paper.venue %} · {{ paper.venue }}{% endif %}
+			{% if paper.source %} · <span class="paper-chip">{{ paper.source }}</span>{% endif %}
+			{% if paper.citations %} · {{ paper.citations }} citations{% endif %}
+		</p>
+		{% if paper.tldr and paper.tldr.text %}
+			<p class="paper-body"><strong>TL;DR:</strong> {{ paper.tldr.text }}</p>
+		{% elif paper.abstract %}
+			<p class="paper-body">{{ paper.abstract[:280] }}{% if paper.abstract|length > 280 %}…{% endif %}</p>
+		{% endif %}
+		{% if paper.url %}</a>{% endif %}
+
+		<div class="paper-actions">
+			<form method="POST" action="{{ url_for('miscellaneous') }}">
+				<input type="hidden" name="entry_date" value="" />
+				<input type="hidden" name="research_topic" value="{{ query }}" />
+				<input type="hidden" name="journal" value="{{ paper.venue or 'Other' }}" />
+				<input type="hidden" name="paper_title" value="{{ paper.title }}" />
+				<input type="hidden" name="paper_link" value="{{ paper.url or '' }}" />
+				<input type="hidden" name="key_facts" value="{{ (paper.tldr.text if paper.tldr and paper.tldr.text else paper.abstract) or '' }}" />
+				<button type="submit" class="button log-btn">+ Add to log</button>
+			</form>
+			<button type="button" class="button analyze-btn"
+					data-query="{{ query }}" data-title="{{ paper.title }}" data-link="{{ paper.url or '' }}"
+					data-abstract="{{ paper.abstract or '' }}" data-venue="{{ paper.venue or '' }}" data-year="{{ paper.year or '' }}"
+					data-authors="{% if paper.authors %}{{ paper.authors[:3] | map(attribute='name') | join(', ') }}{% if paper.authors|length > 3 %} et al.{% endif %}{% endif %}"
+					data-citations="{{ paper.citations or '' }}" data-pdf-url="{{ paper.pdf_url or '' }}"
+					data-fields="{{ paper.fields_of_study | join(', ') if paper.fields_of_study else '' }}"
+					onclick="openAnalysis(this)">
+				Analyze / Summarize ↗
+			</button>
+		</div>
+	</div>
+	{% endfor %}
+</div>
+
+<script>
+	// Native target="_blank" clicks don't open a new tab/window in every host environment
+	// (some embedded/sandboxed webviews block it outright). window.open() is the one API that
+	// reports back whether it worked, so we try that first and fall back to navigating the
+	// current tab — better than a click that silently does nothing.
+	function openInNewTabOrHere(url) {
+		if (!url) return;
+		var win = null;
+		try { win = window.open(url, '_blank'); } catch (e) { win = null; }
+		if (!win) {
+			window.location.href = url;
+		} else {
+			try { win.opener = null; } catch (e) {}
+		}
+	}
+
+	function handleExternalOpen(event, url) {
+		event.preventDefault();
+		openInNewTabOrHere(url);
+		return false;
+	}
+
+	function openAnalysis(btn) {
+		var params = new URLSearchParams({
+			q: btn.getAttribute('data-query') || '',
+			paper_title: btn.getAttribute('data-title') || '',
+			paper_link: btn.getAttribute('data-link') || '',
+			abstract: btn.getAttribute('data-abstract') || '',
+			venue: btn.getAttribute('data-venue') || '',
+			year: btn.getAttribute('data-year') || '',
+			authors: btn.getAttribute('data-authors') || '',
+			citations: btn.getAttribute('data-citations') || '',
+			pdf_url: btn.getAttribute('data-pdf-url') || '',
+			fields_of_study: btn.getAttribute('data-fields') || '',
+		});
+		openInNewTabOrHere('{{ url_for("analyze_search_result") }}?' + params.toString());
+	}
+</script>
+
+{% if total_pages > 1 %}
+<nav style="max-width: 900px; margin: 2em auto 0 auto; display: flex; justify-content: center; align-items: center; gap: 0.4em; flex-wrap: wrap;">
+	{% if page > 1 %}
+		<a href="{{ url_for('search_papers', q=query, page=page - 1, year=filter_year, journal=filter_journal, source=filter_source, min_citations=min_citations) }}" class="pg-link">‹ Prev</a>
+	{% endif %}
+	{% for p in range(1, total_pages + 1) %}
+		{% if p == page %}
+			<span class="pg-link pg-current">{{ p }}</span>
+		{% else %}
+			<a href="{{ url_for('search_papers', q=query, page=p, year=filter_year, journal=filter_journal, source=filter_source, min_citations=min_citations) }}" class="pg-link">{{ p }}</a>
+		{% endif %}
+	{% endfor %}
+	{% if page < total_pages %}
+		<a href="{{ url_for('search_papers', q=query, page=page + 1, year=filter_year, journal=filter_journal, source=filter_source, min_citations=min_citations) }}" class="pg-link pg-next">Next ›</a>
+	{% endif %}
+</nav>
+{% endif %}
+{% endif %}
+
+<style>
+	/* Recent-searches dropdown */
+	.sp-dropdown {
+		position: absolute; top: 100%; left: 0; right: 0; margin-top: 0.3em;
+		background: #fff; border: 1px solid #ddd; border-radius: 8px;
+		box-shadow: 0 4px 14px rgba(0,0,0,0.1); z-index: 20; overflow: hidden;
+	}
+	.sp-dropdown-item { padding: 0.6em 1em; cursor: pointer; font-size: 0.95em; color: #333; }
+	.sp-dropdown-item:hover { background: #f5f5f5; }
+
+	/* Filter bar */
+	.sp-filterbar { max-width: 900px; margin: 0 auto 2em auto; background: #f7f7f7; border-radius: 10px; padding: 1.2em 1.4em; }
+	.sp-filter-row { display: flex; flex-wrap: wrap; gap: 1em; align-items: end; }
+	.sp-filter-field { display: flex; flex-direction: column; gap: 0.35em; font-size: 0.9em; }
+	.sp-filter-field label { color: #666; font-size: 0.85em; text-transform: none; letter-spacing: normal; }
+	.sp-filter-field select, .sp-filter-field input[type="number"] {
+		padding: 0.5em 0.7em; border-radius: 6px; border: 1px solid #ccc; min-width: 9em; background: #fff;
+	}
+	.sp-filter-actions { flex-direction: row; align-items: center; gap: 0.8em; }
+	.sp-filter-actions .button.small { padding: 0.5em 1.1em; font-size: 0.85em; }
+	.sp-clear { color: #888; font-size: 0.85em; }
+	.sp-filter-note { margin: 0.9em 0 0 0; color: #999; font-size: 0.78em; line-height: 1.5; }
+
+	/* Result cards */
+	.paper-card { border-bottom: 1px solid #e6e6e6; padding: 1.5em 0; font-family: "Times New Roman", Times, serif; }
+	.paper-card:first-child { padding-top: 0.5em; }
+	.paper-card-link { display: block; color: inherit; text-decoration: none; border-bottom-color: transparent; margin: -0.6em -0.8em; padding: 0.6em 0.8em; border-radius: 10px; }
+	.paper-card-link:hover { background: #f8faf8; }
+
+	.paper-title {
+		margin: 0 0 0.45em 0;
+		text-transform: none;
+		letter-spacing: -0.01em;
+		font-size: 1.15em;
+		font-weight: 700;
+		line-height: 1.38;
+		color: #21331f;
+	}
+	.paper-card-link:hover .paper-title { text-decoration: underline; text-decoration-color: #2a6f2a; }
+
+	.paper-meta { margin: 0 0 0.6em 0; color: #7a7a7a; font-size: 0.92em; line-height: 1.6; }
+	.paper-chip { background: #eef1ee; padding: 0.1em 0.6em; border-radius: 8px; font-size: 0.85em; }
+	.paper-body { margin: 0; color: #444; font-size: 1em; line-height: 1.65; }
+
+	.paper-actions { display: flex; align-items: center; gap: 0.7em; flex-wrap: wrap; margin-top: 1em; }
+	.paper-actions form { margin: 0; }
+
+	.paper-actions .log-btn,
+	.paper-actions .analyze-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4em;
+		height: auto;
+		line-height: normal;
+		padding: 0.65em 1.3em;
+		border-radius: 999px;
+		font-size: 0.82em;
+		font-weight: 700;
+		letter-spacing: 0.02em;
+		text-transform: none;
+		cursor: pointer;
+		transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+	}
+
+	.paper-actions .log-btn {
+		background: #fff !important;
+		box-shadow: inset 0 0 0 1.5px #d7e3d7 !important;
+		color: #4a5a4a !important;
+	}
+	.paper-actions .log-btn:hover {
+		box-shadow: inset 0 0 0 1.5px #2a6f2a !important;
+		color: #2a6f2a !important;
+		background: #f5faf5 !important;
+		transform: translateY(-1px);
+	}
+	.paper-actions .log-btn:active {
+		transform: translateY(0);
+		background: #eef6ee !important;
+	}
+
+	.paper-actions .analyze-btn {
+		background: linear-gradient(135deg, #2a6f2a, #3d8f3d) !important;
+		box-shadow: 0 2px 8px rgba(42, 111, 42, 0.25) !important;
+		color: #fff !important;
+	}
+	.paper-actions .analyze-btn:hover {
+		background: linear-gradient(135deg, #245f24, #357f35) !important;
+		box-shadow: 0 4px 12px rgba(42, 111, 42, 0.35) !important;
+		color: #fff !important;
+		transform: translateY(-1px);
+	}
+	.paper-actions .analyze-btn:active {
+		transform: translateY(0);
+		box-shadow: 0 2px 6px rgba(42, 111, 42, 0.3) !important;
+	}
+
+	/* Pagination */
+	.pg-link {
+		display: inline-flex; align-items: center; justify-content: center;
+		min-width: 2.2em; padding: 0.4em 0.6em;
+		border-radius: 6px; color: #555; font-size: 0.95em;
+	}
+	.pg-link:not(.pg-current):hover { background: #f1f1f1; }
+	.pg-current { font-weight: bold; color: #000; border: 1px solid #333; }
+	.pg-next { font-weight: bold; }
+
+	@media (max-width: 600px) {
+		.sp-filter-row { flex-direction: column; align-items: stretch; }
+		.sp-filter-field select, .sp-filter-field input[type="number"] { min-width: 0; width: 100%; }
+	}
+</style>
+{% endblock %}

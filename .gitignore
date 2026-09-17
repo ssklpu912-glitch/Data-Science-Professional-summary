@@ -1,1 +1,15 @@
 html5up-phantom.zip
+
+# Secret key auto-generated at runtime — never commit
+html5up-phantom/.flask_secret_key
+
+# SQLite database and backups — real user data (password hashes, logged entries)
+html5up-phantom/instance/
+
+# User-uploaded files and app-generated plots/exports
+html5up-phantom/static/uploads/
+html5up-phantom/lablogbook-export-*.json
+
+# Python bytecode cache
+html5up-phantom/__pycache__/
+*.pyc

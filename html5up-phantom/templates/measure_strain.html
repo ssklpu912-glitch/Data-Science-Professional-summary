@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Strain Mapping — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>Strain mapping (geometric phase analysis)</h1>
+	<p>{{ data_file.label or data_file.original_filename }}</p>
+	<p><a href="{{ url_for('technique_workspace', slug='tem', tab='Strain Mapping') }}">← Back to Strain Mapping</a></p>
+</header>
+
+{% if error %}
+<div style="max-width: 1100px; margin: 0 auto 1.5em auto; background: #fdecea; color: #b3261e; padding: 0.8em 1.2em; border-radius: 8px;">{{ error }}</div>
+{% endif %}
+
+<div style="max-width: 1100px; margin: 0 auto;">
+	<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em 1.5em; margin-bottom: 1.5em;">
+		<p style="margin: 0;"><strong>Step 1:</strong> on the FFT (left), click two non-collinear lattice spots — g1 (yellow) then g2 (cyan). <strong>Step 2:</strong> on the real-space image (right), click two corners of a region you're confident is defect-free and unstrained — this becomes the zero-strain reference for the whole map.</p>
+	</div>
+
+	<div style="display: flex; gap: 1.5em; flex-wrap: wrap;">
+		<div>
+			<h3 style="margin: 0 0 0.5em 0; font-size: 1em;">FFT — click g1, then g2</h3>
+			<div style="overflow: auto; border: 1px solid #ddd; border-radius: 8px; background: black;">
+				<canvas id="fft-canvas" style="display: block; max-width: 100%; cursor: crosshair;"></canvas>
+			</div>
+			<p id="g-status" style="font-size: 0.85em; color: #888;">Click g1...</p>
+		</div>
+		<div>
+			<h3 style="margin: 0 0 0.5em 0; font-size: 1em;">Real image — click 2 corners of reference region</h3>
+			<div style="overflow: auto; border: 1px solid #ddd; border-radius: 8px;">
+				<canvas id="real-canvas" style="display: block; max-width: 100%; cursor: crosshair;"></canvas>
+			</div>
+			<p id="ref-status" style="font-size: 0.85em; color: #888;">Click corner 1...</p>
+		</div>
+	</div>
+
+	<form method="POST" action="{{ url_for('save_strain_measurement', file_id=data_file.id) }}" style="margin-top: 1.5em;">
+		<input type="hidden" name="g1" id="g1_input" />
+		<input type="hidden" name="g2" id="g2_input" />
+		<input type="hidden" name="ref_rect" id="ref_rect_input" />
+		<ul class="actions"><li><input type="submit" value="Compute strain map" class="primary" onclick="return prepareSubmit();" /></li></ul>
+	</form>
+</div>
+
+<script>
+	const fftCanvas = document.getElementById('fft-canvas');
+	const fftCtx = fftCanvas.getContext('2d');
+	const fftImg = new Image();
+	fftImg.crossOrigin = 'anonymous';
+	fftImg.src = "{{ url_for('static', filename='uploads/' + fft_filename) }}";
+	let fftScale = 1;
+	let g1 = null, g2 = null;
+
+	fftImg.onload = function () {
+		const maxW = 480;
+		fftScale = Math.min(1, maxW / fftImg.naturalWidth);
+		fftCanvas.width = fftImg.naturalWidth * fftScale;
+		fftCanvas.height = fftImg.naturalHeight * fftScale;
+		redrawFft();
+	};
+	function redrawFft() {
+		fftCtx.clearRect(0, 0, fftCanvas.width, fftCanvas.height);
+		fftCtx.drawImage(fftImg, 0, 0, fftCanvas.width, fftCanvas.height);
+		if (g1) { fftCtx.fillStyle = '#ffcc00'; fftCtx.beginPath(); fftCtx.arc(g1.x, g1.y, 5, 0, 2*Math.PI); fftCtx.fill(); }
+		if (g2) { fftCtx.fillStyle = '#00e5ff'; fftCtx.beginPath(); fftCtx.arc(g2.x, g2.y, 5, 0, 2*Math.PI); fftCtx.fill(); }
+	}
+	fftCanvas.addEventListener('click', function (e) {
+		const rect = fftCanvas.getBoundingClientRect();
+		const x = (e.clientX - rect.left) * (fftCanvas.width / rect.width);
+		const y = (e.clientY - rect.top) * (fftCanvas.height / rect.height);
+		if (!g1) { g1 = {x:x,y:y}; document.getElementById('g-status').textContent = 'Click g2...'; }
+		else if (!g2) { g2 = {x:x,y:y}; document.getElementById('g-status').textContent = 'g1 and g2 set. Click again to redo.'; }
+		else { g1 = {x:x,y:y}; g2 = null; document.getElementById('g-status').textContent = 'Click g2...'; }
+		redrawFft();
+	});
+
+	const realCanvas = document.getElementById('real-canvas');
+	const realCtx = realCanvas.getContext('2d');
+	const realImg = new Image();
+	realImg.crossOrigin = 'anonymous';
+	realImg.src = "{{ url_for('static', filename='uploads/' + (data_file.preview_filename or data_file.stored_filename)) }}";
+	let realScale = 1;
+	let refCorner1 = null, refCorner2 = null;
+
+	realImg.onload = function () {
+		const maxW = 480;
+		realScale = Math.min(1, maxW / realImg.naturalWidth);
+		realCanvas.width = realImg.naturalWidth * realScale;
+		realCanvas.height = {{ img_h }} * realScale;
+		redrawReal();
+	};
+	function redrawReal() {
+		realCtx.clearRect(0, 0, realCanvas.width, realCanvas.height);
+		realCtx.drawImage(realImg, 0, 0, realImg.naturalWidth, {{ img_h }}, 0, 0, realCanvas.width, realCanvas.height);
+		if (refCorner1 && refCorner2) {
+			realCtx.strokeStyle = '#38a169'; realCtx.lineWidth = 2; realCtx.setLineDash([6,4]);
+			realCtx.strokeRect(Math.min(refCorner1.x,refCorner2.x), Math.min(refCorner1.y,refCorner2.y),
+				Math.abs(refCorner2.x-refCorner1.x), Math.abs(refCorner2.y-refCorner1.y));
+			realCtx.setLineDash([]);
+		} else if (refCorner1) {
+			realCtx.fillStyle = '#38a169'; realCtx.beginPath(); realCtx.arc(refCorner1.x, refCorner1.y, 4, 0, 2*Math.PI); realCtx.fill();
+		}
+	}
+	realCanvas.addEventListener('click', function (e) {
+		const rect = realCanvas.getBoundingClientRect();
+		const x = (e.clientX - rect.left) * (realCanvas.width / rect.width);
+		const y = (e.clientY - rect.top) * (realCanvas.height / rect.height);
+		if (!refCorner1) { refCorner1 = {x:x,y:y}; document.getElementById('ref-status').textContent = 'Click corner 2...'; }
+		else if (!refCorner2) { refCorner2 = {x:x,y:y}; document.getElementById('ref-status').textContent = 'Reference region set. Click again to redo.'; }
+		else { refCorner1 = {x:x,y:y}; refCorner2 = null; document.getElementById('ref-status').textContent = 'Click corner 2...'; }
+		redrawReal();
+	});
+
+	function prepareSubmit() {
+		if (!g1 || !g2) { alert('Click both g1 and g2 on the FFT.'); return false; }
+		if (!refCorner1 || !refCorner2) { alert('Click both corners of the reference region.'); return false; }
+		document.getElementById('g1_input').value = JSON.stringify({ x: g1.x / fftScale, y: g1.y / fftScale });
+		document.getElementById('g2_input').value = JSON.stringify({ x: g2.x / fftScale, y: g2.y / fftScale });
+		document.getElementById('ref_rect_input').value = JSON.stringify({
+			x0: Math.min(refCorner1.x, refCorner2.x) / realScale, y0: Math.min(refCorner1.y, refCorner2.y) / realScale,
+			x1: Math.max(refCorner1.x, refCorner2.x) / realScale, y1: Math.max(refCorner1.y, refCorner2.y) / realScale,
+		});
+		return true;
+	}
+</script>
+{% endblock %}

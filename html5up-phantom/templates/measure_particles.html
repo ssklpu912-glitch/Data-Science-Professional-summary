@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Layer Thickness' if mode == 'layer_thickness' else 'Measure Particles' }} — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>{{ 'Layer thickness' if mode == 'layer_thickness' else 'Measure Particles' }}</h1>
+	<p>{{ data_file.label or data_file.original_filename }}</p>
+	{% if mode == 'layer_thickness' %}
+	<p><a href="{{ url_for('technique_workspace', slug='tem', tab='Layer Thickness') }}">← Back to Layer Thickness</a></p>
+	{% else %}
+	<p><a href="{{ url_for('data_interpretation_workspace') }}">← Back to Data Interpretation</a></p>
+	{% endif %}
+</header>
+
+<div style="max-width: 1000px; margin: 0 auto;">
+	<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em 1.5em; margin-bottom: 1.5em;">
+		{% if mode == 'layer_thickness' %}
+		<p style="margin: 0 0 0.8em 0;"><strong>How to use:</strong> click one interface of a layer, then the opposite interface, to measure its thickness. Repeat for as many layers/positions as you want to sample. Click "Undo" to remove the last measurement, or click a measurement in the list to remove it.</p>
+		{% else %}
+		<p style="margin: 0 0 0.8em 0;"><strong>How to use:</strong> click one edge of a particle, then the opposite edge, to measure its diameter. Repeat for as many particles as you want to sample. Click "Undo" to remove the last measurement, or click a measurement in the list to remove it.</p>
+		{% endif %}
+		<div style="display: flex; gap: 1.5em; align-items: center; flex-wrap: wrap;">
+			<div class="field" style="margin: 0;">
+				<label for="pixel_size_nm">Scale (nm per pixel)</label>
+				<input type="number" id="pixel_size_nm" step="0.0001" value="{{ pixel_size_nm or '' }}" placeholder="e.g. 3.3073" style="width: 160px;" />
+			</div>
+			<p style="margin: 0; font-size: 0.85em; color: #888;">
+				{% if pixel_size_nm %}✓ Auto-detected from the instrument's embedded metadata.{% else %}No scale detected automatically — enter it manually if known (from the image's scale bar or instrument settings), or leave blank to measure in pixels only.{% endif %}
+			</p>
+		</div>
+	</div>
+
+	<div style="display: flex; gap: 1.5em; align-items: flex-start;">
+		<div style="flex: 1; overflow: auto; border: 1px solid #ddd; border-radius: 8px;">
+			<canvas id="measure-canvas" style="display: block; max-width: 100%; cursor: crosshair;"></canvas>
+		</div>
+		<div style="flex: 0 0 260px;">
+			<h3 style="margin-top: 0;">Measurements (<span id="count">0</span>)</h3>
+			<div id="measurement-list" style="max-height: 400px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 0.5em;"></div>
+			<div style="margin-top: 1em; display: flex; gap: 0.6em;">
+				<button type="button" onclick="undoLast()" class="button" style="flex: 1;">Undo</button>
+				<button type="button" onclick="clearAll()" class="button" style="flex: 1;">Clear all</button>
+			</div>
+			<form method="POST" action="{{ url_for('save_particle_measurements', file_id=data_file.id) }}" style="margin-top: 1em;">
+				<input type="hidden" name="measurement_type" value="{{ mode }}" />
+				<input type="hidden" name="pixel_distances" id="pixel_distances_input" value="[]" />
+				<input type="hidden" name="pixel_size_nm" id="pixel_size_nm_input" value="{{ pixel_size_nm or '' }}" />
+				<input type="submit" value="Save & analyze" class="primary" style="width: 100%;" onclick="return prepareSubmit();" />
+			</form>
+		</div>
+	</div>
+</div>
+
+<script>
+	const canvas = document.getElementById('measure-canvas');
+	const ctx = canvas.getContext('2d');
+	const img = new Image();
+	img.crossOrigin = 'anonymous';
+	img.src = "{{ url_for('static', filename='uploads/' + (data_file.preview_filename or data_file.stored_filename)) }}";
+
+	const cropHeight = {{ img_h }};
+	let scaleFactor = 1;
+	let measurements = [];   // each: {p1: {x,y}, p2: {x,y}, pixelDist: number}
+	let pendingPoint = null;
+
+	img.onload = function () {
+		const maxDisplayWidth = 900;
+		scaleFactor = Math.min(1, maxDisplayWidth / img.naturalWidth);
+		canvas.width = img.naturalWidth * scaleFactor;
+		canvas.height = cropHeight * scaleFactor;
+		redraw();
+	};
+
+	function redraw() {
+		ctx.clearRect(0, 0, canvas.width, canvas.height);
+		ctx.drawImage(img, 0, 0, img.naturalWidth, cropHeight, 0, 0, canvas.width, canvas.height);
+
+		measurements.forEach(function (m, i) {
+			ctx.strokeStyle = '#ff3b30';
+			ctx.fillStyle = '#ff3b30';
+			ctx.lineWidth = 2;
+			ctx.beginPath();
+			ctx.moveTo(m.p1.x, m.p1.y);
+			ctx.lineTo(m.p2.x, m.p2.y);
+			ctx.stroke();
+			[m.p1, m.p2].forEach(function (p) {
+				ctx.beginPath();
+				ctx.arc(p.x, p.y, 3, 0, 2 * Math.PI);
+				ctx.fill();
+			});
+			const midX = (m.p1.x + m.p2.x) / 2;
+			const midY = (m.p1.y + m.p2.y) / 2;
+			ctx.fillStyle = 'white';
+			ctx.font = 'bold 11px sans-serif';
+			ctx.fillText(String(i + 1), midX + 4, midY - 4);
+			ctx.fillStyle = '#ff3b30';
+			ctx.fillText(String(i + 1), midX + 3, midY - 5);
+		});
+
+		if (pendingPoint) {
+			ctx.fillStyle = '#ffcc00';
+			ctx.beginPath();
+			ctx.arc(pendingPoint.x, pendingPoint.y, 4, 0, 2 * Math.PI);
+			ctx.fill();
+		}
+	}
+
+	canvas.addEventListener('click', function (e) {
+		const rect = canvas.getBoundingClientRect();
+		const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+		const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+		if (!pendingPoint) {
+			pendingPoint = { x: x, y: y };
+		} else {
+			const p1 = pendingPoint;
+			const p2 = { x: x, y: y };
+			const pixelDist = Math.hypot(p2.x - p1.x, p2.y - p1.y) / scaleFactor;
+			measurements.push({ p1: p1, p2: p2, pixelDist: pixelDist });
+			pendingPoint = null;
+			updateList();
+		}
+		redraw();
+	});
+
+	function updateList() {
+		document.getElementById('count').textContent = measurements.length;
+		const listEl = document.getElementById('measurement-list');
+		listEl.innerHTML = '';
+		const scale = parseFloat(document.getElementById('pixel_size_nm').value) || null;
+		measurements.forEach(function (m, i) {
+			const div = document.createElement('div');
+			div.style.cssText = 'display:flex; justify-content:space-between; padding:0.4em 0.3em; border-bottom:1px solid #eee; cursor:pointer; font-size:0.9em;';
+			const realVal = scale ? (m.pixelDist * scale).toFixed(1) + ' nm' : m.pixelDist.toFixed(1) + ' px';
+			div.innerHTML = '<span>#' + (i + 1) + ': ' + realVal + '</span><span style="color:#b3261e;">✕</span>';
+			div.onclick = function () { measurements.splice(i, 1); updateList(); redraw(); };
+			listEl.appendChild(div);
+		});
+	}
+
+	document.getElementById('pixel_size_nm').addEventListener('input', updateList);
+
+	function undoLast() {
+		measurements.pop();
+		updateList();
+		redraw();
+	}
+
+	function clearAll() {
+		measurements = [];
+		pendingPoint = null;
+		updateList();
+		redraw();
+	}
+
+	function prepareSubmit() {
+		if (measurements.length === 0) {
+			alert('Add at least one measurement first.');
+			return false;
+		}
+		const distances = measurements.map(function (m) { return m.pixelDist; });
+		document.getElementById('pixel_distances_input').value = JSON.stringify(distances);
+		document.getElementById('pixel_size_nm_input').value = document.getElementById('pixel_size_nm').value || '';
+		return true;
+	}
+</script>
+{% endblock %}

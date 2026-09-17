@@ -1,0 +1,377 @@
+{% extends "base.html" %}
+{% block title %}{{ technique_name }} — LabLogbook{% endblock %}
+{% block content %}
+<style>
+	/* Phantom's global input styling breaks native checkboxes (hides/stretches them) —
+	   force them back to normal appearance on this page. */
+	input[type="checkbox"] {
+		appearance: auto !important;
+		-webkit-appearance: checkbox !important;
+		width: 16px !important;
+		height: 16px !important;
+		display: inline-block !important;
+		float: none !important;
+		position: static !important;
+		opacity: 1 !important;
+		margin: 0 0.5em 0 0 !important;
+		padding: 0 !important;
+		background: none !important;
+		border: 1px solid #999 !important;
+		z-index: auto !important;
+	}
+	#main > .inner {
+		max-width: 100% !important;
+		padding: 0 2rem !important;
+	}
+</style>
+<header>
+	<h1>{{ technique_name }}</h1>
+	<p>{% if parent_category %}Under {{ parent_category }}{% endif %}</p>
+</header>
+
+<div style="max-width: 96%; margin: 0 auto 1.5em auto; padding: 0 1em;">
+	<a href="{{ url_for('data_interpretation', category=parent_category) }}">← Back to technique categories</a>
+</div>
+
+<div id="workspace-anchor"></div>
+<div style="display: flex; gap: 2em; align-items: flex-start; max-width: 96%; margin: 0 auto; padding: 0 1em;">
+
+	<!-- Column 1: Sidebar tabs -->
+	<table class="ws-tabs" style="flex: 0 0 190px;" cellpadding="0" cellspacing="0">
+		<tbody>
+		{% for tab_name in tabs %}
+		<tr>
+			<td class="{{ 'active' if tab_name == active_tab else '' }}">
+				<a href="{{ url_for('technique_workspace', slug=slug, tab=tab_name) }}">
+					{{ tab_name }}
+				</a>
+			</td>
+		</tr>
+		{% endfor %}
+		</tbody>
+	</table>
+
+	<!-- Column 2: Controls for the active tab -->
+	<div style="flex: 1; min-width: 0;">
+		<h2 style="margin-top: 0; font-size: 1.3em;">{{ active_tab }}</h2>
+
+		{% if active_tab == 'Select files' %}
+			<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+				<form method="POST" action="{{ url_for('upload_data_file') }}" enctype="multipart/form-data">
+					<input type="hidden" name="technique" value="{{ technique_name }}" />
+					<input type="hidden" name="slug" value="{{ slug }}" />
+					<div class="field">
+						<label for="data_file">Import new file(s)</label>
+						<input type="file" id="data_file" name="data_file" multiple />
+					</div>
+					<ul class="actions"><li><input type="submit" value="Import" class="button" /></li></ul>
+				</form>
+			</div>
+			{% if all_files %}
+			<form method="POST" action="{{ url_for('tech_select_files', slug=slug) }}">
+				<div style="max-height: 350px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 0.8em; margin-bottom: 1em;">
+					{% for f in all_files %}
+					<label style="display: flex; align-items: center; gap: 0.6em; padding: 0.4em 0; border-bottom: 1px solid #eee; cursor: pointer; font-size: 0.9em;">
+						<input type="checkbox" name="file_ids" value="{{ f.id }}" {% if f.id in state.file_ids %}checked{% endif %} />
+						<span style="flex: 1;"><strong>{{ f.label or f.original_filename }}</strong><br><span style="color:#888; font-size:0.85em;">{{ f.uploaded_at.strftime('%Y-%m-%d') }}</span></span>
+						<button type="button" onclick="event.preventDefault(); deleteSpecFile({{ f.id }}, this);" title="Delete this file"
+								style="background: none; border: none; color: #b3261e; cursor: pointer; font-size: 1em; padding: 0.2em 0.5em;">✕</button>
+					</label>
+					{% endfor %}
+				</div>
+				<ul class="actions">
+					<li><input type="submit" value="Use selected files →" class="primary" /></li>
+					<li><button type="button" id="spec-bulk-delete" onclick="bulkDeleteSpecFiles(this)" class="button" style="background: #2b6cb0 !important; box-shadow: none !important; color: #fff !important;">Delete selected</button></li>
+				</ul>
+			</form>
+			<script>
+				function deleteSpecFile(fileId, btn) {
+					if (!appConfirm(btn, 'Delete this file?')) return;
+					var form = document.createElement('form');
+					form.method = 'POST';
+					form.action = '/characterizations/data/' + fileId + '/delete';
+					var slugInput = document.createElement('input');
+					slugInput.type = 'hidden'; slugInput.name = 'slug'; slugInput.value = '{{ slug }}';
+					form.appendChild(slugInput);
+					addCsrfToken(form);
+					document.body.appendChild(form);
+					form.submit();
+				}
+				function bulkDeleteSpecFiles(btn) {
+					var checked = Array.prototype.slice.call(document.querySelectorAll('input[name="file_ids"]:checked'));
+					if (checked.length === 0) return;
+					if (!appConfirm(btn, 'Delete ' + checked.length + ' selected file(s)?')) return;
+					var form = document.createElement('form');
+					form.method = 'POST';
+					form.action = '/characterizations/data/bulk-delete';
+					var fields = { slug: '{{ slug }}', tab: 'Select files' };
+					Object.keys(fields).forEach(function (name) {
+						var input = document.createElement('input');
+						input.type = 'hidden'; input.name = name; input.value = fields[name];
+						form.appendChild(input);
+					});
+					checked.forEach(function (cb) {
+						var input = document.createElement('input');
+						input.type = 'hidden'; input.name = 'file_ids'; input.value = cb.value;
+						form.appendChild(input);
+					});
+					addCsrfToken(form);
+					document.body.appendChild(form);
+					form.submit();
+				}
+			</script>
+			{% else %}
+				<p style="color: #888; font-size: 0.9em;">No files imported yet.</p>
+			{% endif %}
+
+		{% elif active_tab == 'Plot Spectrum' %}
+			{% if not selected_files %}
+				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+			{% else %}
+			<form method="POST" action="{{ url_for('tech_set_plot', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em;">
+				<div class="field">
+					<label for="plot_type">Plot type</label>
+					<select id="plot_type" name="plot_type">
+						{% for value, mode_label in plot_modes %}
+						<option value="{{ value }}" {% if state.plot_type == value %}selected{% endif %}>{{ mode_label }}</option>
+						{% endfor %}
+					</select>
+				</div>
+
+				<h3 style="margin: 1em 0 0.5em 0; font-size: 1em;">Smoothing</h3>
+				<label style="display: flex; align-items: center; gap: 0.5em; font-size: 0.9em;">
+					<input type="checkbox" name="smoothing_enabled" {% if state.smoothing.enabled %}checked{% endif %} /> Apply Savitzky-Golay smoothing
+				</label>
+				<div class="field" style="margin-top: 0.6em;">
+					<label for="smoothing_window">Window size (odd number)</label>
+					<input type="number" id="smoothing_window" name="smoothing_window" min="5" step="2" value="{{ state.smoothing.window }}" />
+				</div>
+				<div class="field">
+					<label for="smoothing_polyorder">Polynomial order</label>
+					<input type="number" id="smoothing_polyorder" name="smoothing_polyorder" min="1" max="6" value="{{ state.smoothing.polyorder }}" />
+				</div>
+				<p style="font-size: 0.8em; color: #888; margin: 0.4em 0 0 0;">Larger window = smoother, but can flatten real peaks. Applies to Line Graph mode.</p>
+
+				<h3 style="margin: 1em 0 0.5em 0; font-size: 1em;">Multi-column data</h3>
+				<div onclick="toggleWideMode()" style="display: flex; align-items: center; gap: 0.6em; cursor: pointer; user-select: none; font-size: 0.9em;">
+					<span id="wide-mode-box" style="display: inline-block; width: 16px; height: 16px; min-width: 16px; border: 2px solid {% if state.wide_mode %}#333{% else %}#999{% endif %}; border-radius: 4px; background: {% if state.wide_mode %}#333{% else %}#fff{% endif %}; position: relative;">
+						{% if state.wide_mode %}<span style="position:absolute; left:2px; top:-2px; color:#fff; font-size:12px; line-height:1;">✓</span>{% endif %}
+					</span>
+					<span>Plot all columns as separate series</span>
+					<input type="checkbox" name="wide_mode" id="wide-mode-cb" {% if state.wide_mode %}checked{% endif %}
+						   style="display: none !important; pointer-events: none !important; position: absolute; opacity: 0; width: 0; height: 0;" tabindex="-1" />
+				</div>
+				<script>
+					function toggleWideMode() {
+						var cb = document.getElementById('wide-mode-cb');
+						var box = document.getElementById('wide-mode-box');
+						cb.checked = !cb.checked;
+						if (cb.checked) {
+							box.style.background = '#333'; box.style.borderColor = '#333';
+							box.innerHTML = '<span style="position:absolute; left:2px; top:-2px; color:#fff; font-size:12px; line-height:1;">✓</span>';
+						} else {
+							box.style.background = '#fff'; box.style.borderColor = '#999';
+							box.innerHTML = '';
+						}
+					}
+				</script>
+				<p style="font-size: 0.8em; color: #888; margin: 0.4em 0 0 0;">For matrix-style files (e.g. fluorescence EEM: one X column + many emission-wavelength columns). Uses the first column as X and plots every other column as its own line, color-coded by wavelength.</p>
+
+				<ul class="actions"><li><input type="submit" value="Plot" class="primary" /></li></ul>
+			</form>
+			{% if plot_errors %}
+			<div style="background: #fdecea; color: #b3261e; padding: 0.7em 1em; border-radius: 8px; margin-top: 1em; font-size: 0.85em;">
+				{% for e in plot_errors %}<div>{{ e }}</div>{% endfor %}
+			</div>
+			{% endif %}
+			{% endif %}
+
+		{% elif active_tab == 'Peak Picking' %}
+			{% if not selected_files %}
+				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+			{% elif state.plot_type == 'contour_2d' %}
+				<p style="color: #888; font-size: 0.9em;">Peak picking needs a 1D spectrum — switch modes in <strong>Plot Spectrum</strong>.</p>
+			{% else %}
+			<form method="POST" action="{{ url_for('tech_set_peaks', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em;">
+				<div class="field">
+					<label for="prominence">Min. peak prominence</label>
+					<input type="number" id="prominence" name="prominence" step="0.01" value="{{ state.peaks.prominence if state.peaks.prominence is not none else '' }}" placeholder="e.g. 0.1" />
+				</div>
+				<div class="field">
+					<label for="min_height">Min. peak height</label>
+					<input type="number" id="min_height" name="min_height" step="0.01" value="{{ state.peaks.min_height if state.peaks.min_height is not none else '' }}" placeholder="optional" />
+				</div>
+				<ul class="actions"><li><input type="submit" value="Detect peaks" class="primary" /></li></ul>
+				<p style="font-size: 0.82em; color: #888; margin-top: 0.6em;">Higher prominence = fewer, more significant peaks.</p>
+			</form>
+
+			{% if peaks_by_label %}
+			<div style="margin-top: 1.2em;">
+				{% for label, peaks in peaks_by_label.items() %}
+				<div style="background: #f7f7f7; border-radius: 8px; padding: 0.8em 1em; margin-bottom: 0.8em;">
+					<strong style="font-size: 0.9em;">{{ label }}</strong> — {{ peaks|length }} peak(s)
+					{% if peaks %}
+					<table style="width: 100%; margin-top: 0.5em; border-collapse: collapse; font-size: 0.8em;">
+						<thead><tr><th style="text-align:left; padding: 0.2em;">X</th><th style="text-align:left; padding: 0.2em;">Y</th></tr></thead>
+						<tbody>
+							{% for px, py in peaks %}
+							<tr><td style="padding: 0.2em; border-top: 1px solid #eee;">{{ '%.4g' % px }}</td><td style="padding: 0.2em; border-top: 1px solid #eee;">{{ '%.4g' % py }}</td></tr>
+							{% endfor %}
+						</tbody>
+					</table>
+					{% endif %}
+				</div>
+				{% endfor %}
+			</div>
+			{% endif %}
+			{% endif %}
+
+		{% elif active_tab == 'Format' %}
+			{% if not selected_files %}
+				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+			{% else %}
+			<form method="POST" action="{{ url_for('tech_set_format', slug=slug) }}">
+				<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
+					<h3 style="margin-top:0; font-size: 1em;">Legend</h3>
+					<label style="display: flex; align-items: center; gap: 0.5em; margin-bottom: 0.6em; font-size: 0.9em;"><input type="checkbox" name="legend" {% if state.format.legend %}checked{% endif %} /> Show legend</label>
+					<div class="field">
+						<label for="legend_loc">Position</label>
+						<select id="legend_loc" name="legend_loc">
+							{% for loc in ['best', 'upper right', 'upper left', 'lower right', 'lower left'] %}
+							<option value="{{ loc }}" {% if state.format.legend_loc == loc %}selected{% endif %}>{{ loc | capitalize }}</option>
+							{% endfor %}
+						</select>
+					</div>
+					<div class="field">
+						<label for="legend_orientation">Orientation</label>
+						<select id="legend_orientation" name="legend_orientation">
+							<option value="vertical" {% if state.format.legend_orientation == 'vertical' %}selected{% endif %}>Vertical</option>
+							<option value="horizontal" {% if state.format.legend_orientation == 'horizontal' %}selected{% endif %}>Horizontal</option>
+						</select>
+					</div>
+					<div class="field">
+						<label for="legend_scale">Size (scale)</label>
+						<input type="number" id="legend_scale" name="legend_scale" min="0.4" max="2" step="0.1" value="{{ state.format.legend_scale }}" />
+					</div>
+				</div>
+
+				<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
+					<h3 style="margin-top:0; font-size: 1em;">Colors</h3>
+					<div class="field">
+						<label for="colormap">Color map</label>
+						<select id="colormap" name="colormap">
+							{% for cm in colormap_options %}
+							<option value="{{ cm }}" {% if state.format.colormap == cm %}selected{% endif %}>{{ cm }}</option>
+							{% endfor %}
+						</select>
+					</div>
+				</div>
+
+				<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
+					<h3 style="margin-top:0; font-size: 1em;">Lines, ticks &amp; labels</h3>
+					<div class="field">
+						<label for="line_width">Line thickness</label>
+						<input type="number" id="line_width" name="line_width" min="0.5" max="6" step="0.1" value="{{ state.format.line_width }}" />
+					</div>
+					<div class="field">
+						<label for="marker_size">Marker size</label>
+						<input type="number" id="marker_size" name="marker_size" min="4" max="60" step="1" value="{{ state.format.marker_size }}" />
+					</div>
+					<div class="field">
+						<label for="tick_width">Tick thickness</label>
+						<input type="number" id="tick_width" name="tick_width" min="0.5" max="4" step="0.1" value="{{ state.format.tick_width }}" />
+					</div>
+					<div class="field">
+						<label for="label_size">Axis label size</label>
+						<input type="number" id="label_size" name="label_size" min="6" max="24" step="1" value="{{ state.format.label_size }}" />
+					</div>
+					<label style="display: flex; align-items: center; gap: 0.5em; margin-top: 0.6em; font-size: 0.9em;"><input type="checkbox" name="bold_labels" {% if state.format.bold_labels %}checked{% endif %} /> Bold axis labels</label>
+					<label style="display: flex; align-items: center; gap: 0.5em; margin-top: 0.4em; font-size: 0.9em;"><input type="checkbox" name="grid" {% if state.format.grid %}checked{% endif %} /> Show grid</label>
+				</div>
+
+				<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
+					<h3 style="margin-top:0; font-size: 1em;">Axis scaling</h3>
+					<label style="display: flex; align-items: center; gap: 0.5em; font-size: 0.9em;"><input type="checkbox" name="log_x" {% if state.format.log_x %}checked{% endif %} /> Log scale — X axis</label>
+					<label style="display: flex; align-items: center; gap: 0.5em; margin-top: 0.4em; font-size: 0.9em;"><input type="checkbox" name="log_y" {% if state.format.log_y %}checked{% endif %} /> Log scale — Y axis</label>
+
+					<h3 style="margin: 1em 0 0.5em 0; font-size: 1em;">Axis range</h3>
+					<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.8em;">
+						<div class="field" style="margin: 0;">
+							<label for="x_min">X min</label>
+							<input type="number" id="x_min" name="x_min" step="any" value="{{ state.format.x_min if state.format.x_min is not none else '' }}" placeholder="auto" />
+						</div>
+						<div class="field" style="margin: 0;">
+							<label for="x_max">X max</label>
+							<input type="number" id="x_max" name="x_max" step="any" value="{{ state.format.x_max if state.format.x_max is not none else '' }}" placeholder="auto" />
+						</div>
+						<div class="field" style="margin: 0;">
+							<label for="y_min">Y min</label>
+							<input type="number" id="y_min" name="y_min" step="any" value="{{ state.format.y_min if state.format.y_min is not none else '' }}" placeholder="auto" />
+						</div>
+						<div class="field" style="margin: 0;">
+							<label for="y_max">Y max</label>
+							<input type="number" id="y_max" name="y_max" step="any" value="{{ state.format.y_max if state.format.y_max is not none else '' }}" placeholder="auto" />
+						</div>
+					</div>
+					<p style="font-size: 0.8em; color: #888; margin: 0.6em 0 0 0;">Leave blank for auto-scaling. e.g. X: 250 to 430, Y max: 6.5</p>
+				</div>
+
+				<ul class="actions"><li><input type="submit" value="Apply formatting" class="primary" /></li></ul>
+			</form>
+			{% endif %}
+
+		{% elif active_tab == 'Analysis' %}
+			{% if not selected_files %}
+				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+			{% elif not results %}
+				<p style="color: #888; font-size: 0.9em;">No plot generated yet — visit <strong>Plot Spectrum</strong> first.</p>
+			{% else %}
+				{% if spectroscopy_analysis %}
+				<h3 style="margin: 0 0 0.6em 0; font-size: 1em;">Interpretation</h3>
+				{% for r in spectroscopy_analysis %}
+				<div style="background: #eef6ee; border-left: 3px solid #4caf50; border-radius: 4px; padding: 0.7em 0.9em; margin-bottom: 0.7em;">
+					<strong style="font-size: 0.88em;">{{ r.label }}</strong>
+					<p style="margin: 0.4em 0 0 0; font-size: 0.85em;">{{ r.analysis }}</p>
+				</div>
+				{% endfor %}
+				<p style="font-size: 0.75em; color: #999; margin: 0.5em 0 1.2em 0;">Peak assignments are approximate reference-table matches, not a substitute for expert interpretation.</p>
+				{% endif %}
+
+				<details>
+					<summary style="cursor: pointer; color: #888; font-size: 0.85em; margin-bottom: 0.6em;">Basic statistics</summary>
+					{% for r in results %}
+					<div style="background: #f7f7f7; border-radius: 8px; padding: 1em; margin-bottom: 0.8em;">
+						<strong style="font-size: 0.9em;">{{ r.label }}</strong>
+						<p style="margin: 0.4em 0 0 0; font-size: 0.82em; color: #555;">
+							n={{ r.stats.count }} mean={{ r.stats.mean }} std={{ r.stats.std }}<br>min={{ r.stats.min }} max={{ r.stats.max }}
+						</p>
+					</div>
+					{% endfor %}
+				</details>
+			{% endif %}
+		{% endif %}
+	</div>
+
+	<!-- Column 3: Plot display -->
+	<div style="flex: 1; min-width: 0;">
+		<h2 style="margin-top: 0; font-size: 1.3em;">Plot</h2>
+		{% if plot_filename %}
+			<img src="{{ url_for('static', filename='uploads/' + plot_filename) }}" alt="Plot" style="max-width: 100%; border-radius: 8px; border: 1px solid #ddd;" />
+			<div style="margin-top: 0.8em; font-size: 0.9em; color: #555;">
+				Export:
+				<a href="{{ url_for('static', filename='uploads/' + plot_filename) }}" download>PNG</a> ·
+				<a href="{{ url_for('static', filename='uploads/' + plot_filename.replace('.png', '.svg')) }}" download>SVG</a> ·
+				<a href="{{ url_for('static', filename='uploads/' + plot_filename.replace('.png', '.pdf')) }}" download>PDF</a>
+			</div>
+		{% else %}
+			<div style="background: #f7f7f7; border-radius: 10px; padding: 3em; text-align: center; color: #888;">
+				<p style="margin: 0;">No plot yet. Select files, then go to <strong>Plot Spectrum</strong> and click Plot.</p>
+			</div>
+		{% endif %}
+	</div>
+</div>
+
+<script>
+	document.getElementById('workspace-anchor').scrollIntoView();
+</script>
+{% endblock %}

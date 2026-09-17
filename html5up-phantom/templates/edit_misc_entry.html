@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Edit paper entry — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>Edit entry</h1>
+	<p>Update the details below and save your changes.</p>
+</header>
+
+<div style="max-width: 900px; margin: 0 auto 3em auto; background: #f7f7f7; border-radius: 10px; padding: 2em;">
+	<form method="POST" enctype="multipart/form-data">
+		<div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.2em; margin-bottom: 1.2em;">
+			<div class="field">
+				<label for="entry_date">Date</label>
+				<input type="date" id="entry_date" name="entry_date" value="{{ entry.entry_date.strftime('%Y-%m-%d') }}" required />
+			</div>
+			<div class="field">
+				<label for="research_topic">Research topic</label>
+				<input type="text" id="research_topic" name="research_topic" value="{{ entry.research_topic }}" required />
+			</div>
+			<div class="field">
+				<label for="journal">Journal</label>
+				<select id="journal" name="journal">
+					{% for opt in journal_options %}
+					<option value="{{ opt }}" {% if entry.journal == opt %}selected{% endif %}>{{ opt }}</option>
+					{% endfor %}
+				</select>
+			</div>
+			<div class="field">
+				<label for="paper_title">Paper title</label>
+				<input type="text" id="paper_title" name="paper_title" value="{{ entry.paper_title }}" />
+			</div>
+		</div>
+
+		<div class="field">
+			<label for="paper_link">Link to paper</label>
+			<input type="url" id="paper_link" name="paper_link" value="{{ entry.paper_link }}" />
+		</div>
+		<div class="field">
+			<label for="pdf_file">Attach PDF {% if entry.pdf_filename %}(currently: {{ entry.pdf_filename }} — upload a new file to replace it){% endif %}</label>
+			<input type="file" id="pdf_file" name="pdf_file" accept="application/pdf" />
+		</div>
+		<div class="field">
+			<label for="key_facts">Important facts from this paper</label>
+			<textarea id="key_facts" name="key_facts" rows="4">{{ entry.key_facts }}</textarea>
+		</div>
+
+		<ul class="actions">
+			<li><input type="submit" value="Save changes" class="primary" /></li>
+			<li><a href="{{ url_for('miscellaneous') }}" class="button">Cancel</a></li>
+		</ul>
+	</form>
+</div>
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Configure Overlay — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>Configure Overlay</h1>
+	<p>Choose which columns to plot from each file. Each file gets its own line/series color.</p>
+	<p><a href="{{ url_for('select_overlay_files') }}">← Change file selection</a></p>
+</header>
+
+<div style="max-width: 900px; margin: 0 auto; background: #f7f7f7; border-radius: 10px; padding: 2em;">
+	<form method="POST" action="{{ url_for('generate_overlay') }}">
+		<div class="field" style="margin-bottom: 1.5em;">
+			<label for="label">Overlay title (optional)</label>
+			<input type="text" id="label" name="label" placeholder="e.g. Cycling comparison — Cell A vs Cell B" />
+		</div>
+
+		{% for entry in file_columns %}
+		<div style="background: white; border-radius: 8px; padding: 1.2em; margin-bottom: 1em;">
+			<input type="hidden" name="file_id" value="{{ entry.file.id }}" />
+			<h3 style="margin: 0 0 0.8em 0;">{{ entry.file.label or entry.file.original_filename }}</h3>
+
+			{% if entry.error %}
+				<p style="color: #b3261e; font-size: 0.9em;">{{ entry.error }} This file will be skipped.</p>
+			{% else %}
+				<input type="hidden" name="x_column_{{ entry.file.id }}" value="{{ entry.x_col }}" />
+				<input type="hidden" name="y_column_{{ entry.file.id }}" value="{{ entry.y_col }}" />
+				<div style="display: flex; gap: 2em; align-items: flex-end; flex-wrap: wrap;">
+					<p style="margin: 0; color: #555;">
+						Plotting <strong>{{ entry.y_col }}</strong> vs <strong>{{ entry.x_col }}</strong>
+						<span style="color: #999; font-size: 0.85em;">(auto-detected)</span>
+					</p>
+					<div class="field" style="margin: 0;">
+						<label for="fit_type_{{ entry.file.id }}">Fit</label>
+						<select id="fit_type_{{ entry.file.id }}" name="fit_type_{{ entry.file.id }}">
+							<option value="none">None</option>
+							<option value="linear">Linear</option>
+							<option value="quadratic">Quadratic</option>
+							<option value="exponential">Exponential</option>
+							<option value="gaussian">Gaussian</option>
+						</select>
+					</div>
+				</div>
+			{% endif %}
+		</div>
+		{% endfor %}
+
+		<ul class="actions">
+			<li><input type="submit" value="Generate overlay plot" class="primary" /></li>
+		</ul>
+	</form>
+</div>
+{% endblock %}

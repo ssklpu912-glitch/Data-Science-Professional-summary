@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Edit characterization entry — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>Edit characterization entry</h1>
+	<p>Update the details below and save your changes.</p>
+</header>
+
+<div style="max-width: 900px; margin: 0 auto 3em auto; background: #f7f7f7; border-radius: 10px; padding: 2em;">
+	<form method="POST">
+		<div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.2em; margin-bottom: 1.2em;">
+			<div class="field">
+				<label for="technique_name">Technique name</label>
+				<input type="text" id="technique_name" name="technique_name" value="{{ entry.technique_name }}" required />
+			</div>
+			<div class="field">
+				<label for="date_scheduled">Date scheduled</label>
+				<input type="date" id="date_scheduled" name="date_scheduled" value="{{ entry.date_scheduled.strftime('%Y-%m-%d') }}" required />
+			</div>
+			<div class="field">
+				<label for="num_samples">No. of samples</label>
+				<input type="number" id="num_samples" name="num_samples" min="1" value="{{ entry.num_samples if entry.num_samples is not none else '' }}" />
+			</div>
+			<div class="field">
+				<label for="sample_prep">Sample preparation</label>
+				<select id="sample_prep" name="sample_prep">
+					{% for opt in sample_prep_options %}
+					<option value="{{ opt }}" {% if entry.sample_prep == opt %}selected{% endif %}>{{ opt }}</option>
+					{% endfor %}
+				</select>
+			</div>
+			<div class="field">
+				<label for="outcome">Outcome of data collected</label>
+				<select id="outcome" name="outcome">
+					{% for opt in outcome_options %}
+					<option value="{{ opt }}" {% if entry.outcome == opt %}selected{% endif %}>{{ opt }}</option>
+					{% endfor %}
+				</select>
+			</div>
+		</div>
+		<div class="field">
+			<label for="interpretation">Interpretation</label>
+			<textarea id="interpretation" name="interpretation" rows="3">{{ entry.interpretation }}</textarea>
+		</div>
+		<ul class="actions">
+			<li><input type="submit" value="Save changes" class="primary" /></li>
+			<li><a href="{{ url_for('characterizations') }}" class="button">Cancel</a></li>
+		</ul>
+	</form>
+</div>
+{% endblock %}

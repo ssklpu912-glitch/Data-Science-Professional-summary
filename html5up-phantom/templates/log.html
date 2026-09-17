@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}{{ page_title }} — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>{{ page_title }}</h1>
+	<p>Log a new entry below, or review what you've recorded so far.</p>
+</header>
+
+<div style="max-width: 900px; margin: 0 auto 3em auto; background: #f7f7f7; border-radius: 10px; padding: 2em;">
+	<form method="POST">
+
+		<!-- Quick-glance grid: date/time, title, type, status -->
+		<div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.2em; margin-bottom: 1.5em;">
+			<div class="field">
+				<label for="entry_datetime">Date &amp; time</label>
+				<input type="datetime-local" id="entry_datetime" name="entry_datetime" value="{{ now }}" required />
+			</div>
+			<div class="field">
+				<label for="title">Title</label>
+				<input type="text" id="title" name="title" placeholder="e.g. Titration of NaOH solution" required />
+			</div>
+			<div class="field">
+				<label for="exp_type">Type of experiment</label>
+				<select id="exp_type" name="exp_type">
+					{% for opt in exp_type_options %}
+					<option value="{{ opt }}">{{ opt }}</option>
+					{% endfor %}
+				</select>
+			</div>
+			<div class="field">
+				<label for="status">Status</label>
+				<select id="status" name="status">
+					{% for opt in status_options %}
+					<option value="{{ opt }}">{{ opt }}</option>
+					{% endfor %}
+				</select>
+			</div>
+		</div>
+
+		<!-- Scientific content -->
+		<div class="field">
+			<label for="objective">Objective / Hypothesis</label>
+			<textarea id="objective" name="objective" rows="2" placeholder="What are you trying to find out?"></textarea>
+		</div>
+		<div class="field">
+			<label for="materials">Materials / Reagents</label>
+			<textarea id="materials" name="materials" rows="2" placeholder="What did you use?"></textarea>
+		</div>
+		<div class="field">
+			<label for="procedure">Procedure / Method</label>
+			<textarea id="procedure" name="procedure" rows="3" placeholder="Brief steps taken"></textarea>
+		</div>
+
+		<div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.2em;">
+			<div class="field">
+				<label for="input_params">Input parameters</label>
+				<textarea id="input_params" name="input_params" rows="3" placeholder="Controlled variables, e.g. temperature = 25°C"></textarea>
+			</div>
+			<div class="field">
+				<label for="output_results">Output / Results</label>
+				<textarea id="output_results" name="output_results" rows="3" placeholder="Measured values, readings, yields"></textarea>
+			</div>
+		</div>
+
+		<div class="field">
+			<label for="observations">Observations</label>
+			<textarea id="observations" name="observations" rows="2" placeholder="Anything unexpected or notable?"></textarea>
+		</div>
+		<div class="field">
+			<label for="conclusion">Conclusion</label>
+			<textarea id="conclusion" name="conclusion" rows="2" placeholder="What does this mean? Next steps?"></textarea>
+		</div>
+
+		<ul class="actions">
+			<li><input type="submit" value="+ Add entry" class="primary" /></li>
+		</ul>
+	</form>
+</div>
+
+<!-- Compare entries -->
+{% if entries|length >= 2 %}
+<h2>Compare two entries</h2>
+<div style="max-width: 900px; margin: 0 auto 1em auto;">
+	<form method="GET" style="display: flex; gap: 1em; align-items: flex-end; flex-wrap: wrap;">
+		<div class="field" style="flex: 1; min-width: 220px;">
+			<label for="compare_a">Entry A</label>
+			<select id="compare_a" name="compare_a">
+				{% for e in entries %}
+				<option value="{{ e.id }}" {% if compare_a and e.id == compare_a.id %}selected{% endif %}>{{ e.title }} — {{ e.entry_datetime.strftime('%Y-%m-%d %H:%M') }}</option>
+				{% endfor %}
+			</select>
+		</div>
+		<div class="field" style="flex: 1; min-width: 220px;">
+			<label for="compare_b">Entry B</label>
+			<select id="compare_b" name="compare_b">
+				{% for e in entries %}
+				<option value="{{ e.id }}" {% if compare_b and e.id == compare_b.id %}selected{% endif %}>{{ e.title }} — {{ e.entry_datetime.strftime('%Y-%m-%d %H:%M') }}</option>
+				{% endfor %}
+			</select>
+		</div>
+		<div class="field" style="flex: 0;">
+			<input type="submit" value="Compare" class="primary" />
+		</div>
+	</form>
+</div>
+
+{% if compare_a and compare_b and compare_a.id != compare_b.id %}
+<div style="max-width: 900px; margin: 0 auto 1.5em auto; overflow-x: auto;">
+	<table style="width: 100%; border-collapse: collapse;">
+		<thead>
+			<tr>
+				<th style="text-align: left; padding: 0.6em; border-bottom: 2px solid #ccc;">Field</th>
+				<th style="text-align: left; padding: 0.6em; border-bottom: 2px solid #ccc;">{{ compare_a.title }} <span style="color:#888; font-weight: normal;">({{ compare_a.entry_datetime.strftime('%Y-%m-%d %H:%M') }})</span></th>
+				<th style="text-align: left; padding: 0.6em; border-bottom: 2px solid #ccc;">{{ compare_b.title }} <span style="color:#888; font-weight: normal;">({{ compare_b.entry_datetime.strftime('%Y-%m-%d %H:%M') }})</span></th>
+			</tr>
+		</thead>
+		<tbody>
+			<tr>
+				<td style="padding: 0.6em; border-bottom: 1px solid #eee; font-weight: bold;">Status</td>
+				<td style="padding: 0.6em; border-bottom: 1px solid #eee;">{{ compare_a.status or '—' }}</td>
+				<td style="padding: 0.6em; border-bottom: 1px solid #eee;">{{ compare_b.status or '—' }}</td>
+			</tr>
+			<tr>
+				<td style="padding: 0.6em; border-bottom: 1px solid #eee; font-weight: bold;">Input parameters</td>
+				<td style="padding: 0.6em; border-bottom: 1px solid #eee;">{{ compare_a.input_params or '—' }}</td>
+				<td style="padding: 0.6em; border-bottom: 1px solid #eee;">{{ compare_b.input_params or '—' }}</td>
+			</tr>
+			<tr>
+				<td style="padding: 0.6em; border-bottom: 1px solid #eee; font-weight: bold;">Output / Results</td>
+				<td style="padding: 0.6em; border-bottom: 1px solid #eee;">{{ compare_a.output_results or '—' }}</td>
+				<td style="padding: 0.6em; border-bottom: 1px solid #eee;">{{ compare_b.output_results or '—' }}</td>
+			</tr>
+			<tr>
+				<td style="padding: 0.6em; border-bottom: 1px solid #eee; font-weight: bold;">Conclusion</td>
+				<td style="padding: 0.6em; border-bottom: 1px solid #eee;">{{ compare_a.conclusion or '—' }}</td>
+				<td style="padding: 0.6em; border-bottom: 1px solid #eee;">{{ compare_b.conclusion or '—' }}</td>
+			</tr>
+		</tbody>
+	</table>
+</div>
+
+<div style="max-width: 900px; margin: 0 auto 3em auto; background: #eef6ee; border-left: 4px solid #4caf50; padding: 1em 1.5em; border-radius: 6px;">
+	<strong>Inference:</strong>
+	<ul style="margin: 0.5em 0 0 1.2em; padding: 0;">
+		{% for note in inference %}
+		<li>{{ note }}</li>
+		{% endfor %}
+	</ul>
+</div>
+{% endif %}
+{% endif %}
+
+<h2>Past entries</h2>
+{% if entries %}
+	<ul style="list-style: none; padding: 0;">
+	{% for entry in entries %}
+		<li style="border-bottom: 1px solid #ddd; padding: 0.9em 0;">
+			<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5em;">
+				<div>
+					<strong>{{ entry.title }}</strong>
+					<span style="color: #888; margin-left: 0.5em;">{{ entry.entry_datetime.strftime('%Y-%m-%d') }}</span>
+					<span style="color: #888; margin-left: 0.5em;">{{ entry.entry_datetime.strftime('%H:%M') }}</span>
+					{% if entry.exp_type %}<span style="color: #888; margin-left: 0.5em;">· {{ entry.exp_type }}</span>{% endif %}
+					{% if entry.status %}<span style="margin-left: 0.5em; padding: 0.1em 0.6em; border-radius: 10px; background: #eee; font-size: 0.85em;">{{ entry.status }}</span>{% endif %}
+				</div>
+				<div style="display: flex; align-items: center; gap: 1.2em;">
+					<a href="javascript:void(0);" onclick="toggleEntry('entry-{{ entry.id }}', this)" style="font-size: 0.9em;">Show</a>
+					<a href="{{ url_for('edit_entry', entry_id=entry.id) }}">Edit</a>
+					<form method="POST" action="{{ url_for('delete_entry', entry_id=entry.id) }}" style="display: inline; margin: 0;" onsubmit="return appConfirm(this.querySelector('[type=submit]'), 'Delete this entry?');">
+						<button type="submit" style="background: none; border: none; color: #b3261e; cursor: pointer; padding: 0; font-size: 1em;">Delete</button>
+					</form>
+				</div>
+			</div>
+
+			<div id="entry-{{ entry.id }}" style="display: none; margin-top: 0.8em;">
+				{% if entry.objective %}<p style="margin: 0.5em 0 0 0;"><strong>Objective:</strong> {{ entry.objective }}</p>{% endif %}
+				{% if entry.materials %}<p style="margin: 0.3em 0 0 0;"><strong>Materials:</strong> {{ entry.materials }}</p>{% endif %}
+				{% if entry.procedure %}<p style="margin: 0.3em 0 0 0;"><strong>Procedure:</strong> {{ entry.procedure }}</p>{% endif %}
+				{% if entry.input_params %}<p style="margin: 0.3em 0 0 0;"><strong>Input:</strong> {{ entry.input_params }}</p>{% endif %}
+				{% if entry.output_results %}<p style="margin: 0.3em 0 0 0;"><strong>Output:</strong> {{ entry.output_results }}</p>{% endif %}
+				{% if entry.observations %}<p style="margin: 0.3em 0 0 0;"><strong>Observations:</strong> {{ entry.observations }}</p>{% endif %}
+				{% if entry.conclusion %}<p style="margin: 0.3em 0 0 0;"><strong>Conclusion:</strong> {{ entry.conclusion }}</p>{% endif %}
+			</div>
+		</li>
+	{% endfor %}
+	</ul>
+	<script>
+		function toggleEntry(id, link) {
+			var el = document.getElementById(id);
+			if (el.style.display === 'none') {
+				el.style.display = 'block';
+				link.textContent = 'Hide';
+			} else {
+				el.style.display = 'none';
+				link.textContent = 'Show';
+			}
+		}
+	</script>
+{% else %}
+	<p>No entries yet — add your first one above.</p>
+{% endif %}
+{% endblock %}
