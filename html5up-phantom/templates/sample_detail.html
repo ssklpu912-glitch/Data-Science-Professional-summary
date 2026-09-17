@@ -65,7 +65,7 @@
 	{% endif %}
 
 	{% if by_technique|length >= 1 and sample.properties|length >= 1 %}
-	<p><a href="{{ url_for('sample_correlate') }}" class="el-text-btn">Correlate properties across samples &rarr;</a></p>
+	<p><a href="{{ url_for('sample_correlate') }}" class="el-text-btn">Correlate properties across samples &rarr;</a> &middot; <a href="{{ url_for('sample_drift') }}" class="el-text-btn">Track drift &amp; anomalies over time &rarr;</a></p>
 	{% endif %}
 
 	<form method="POST" action="{{ url_for('delete_sample', sample_id=sample.id) }}" onsubmit="return appConfirm(this.querySelector('[type=submit]'), 'Delete this sample and all its logged properties?');" style="margin-top: 1.5em;">

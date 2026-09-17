@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Drift &amp; anomalies — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>Drift &amp; anomaly detection</h1>
+	<p>Track one logged property over time across every sample that has it, to catch a slow instrument/sample drift or a single measurement that doesn't belong — before it quietly skews everything downstream.</p>
+</header>
+
+<div style="max-width: 900px; margin: 0 auto;">
+
+	<p><a href="{{ url_for('samples') }}" class="el-text-btn">&larr; All samples</a></p>
+
+	{% if not axes %}
+	<p class="el-empty">Log a property on at least one sample before you can track it over time. Go to <a href="{{ url_for('samples') }}">Samples</a> to add some.</p>
+	{% else %}
+
+	<div class="el-card el-form-card">
+		<form method="GET" action="{{ url_for('sample_drift') }}">
+			<div class="field">
+				<label>Property</label>
+				<select name="axis" required>
+					<option value="">&mdash; Select a property &mdash;</option>
+					{% for a in axes %}
+					<option value="{{ a.key }}" {{ 'selected' if a.key == axis else '' }}>{{ a.label }}</option>
+					{% endfor %}
+				</select>
+			</div>
+			<button type="submit" class="button primary">Track over time</button>
+		</form>
+	</div>
+
+	{% if error %}
+	<p class="el-empty">{{ error }}</p>
+	{% endif %}
+
+	{% if plot_filename %}
+	<div class="el-card">
+		<img src="{{ url_for('static', filename='uploads/' + plot_filename) }}" alt="Drift plot" style="max-width: 100%; border-radius: 8px;" />
+
+		<div class="el-meta-row" style="margin-top: 1em;">
+			<span class="el-chip">n = {{ points|length }}</span>
+			{% if drift.r is not none %}
+			<span class="el-chip {{ 'el-chip-warn' if drift.significant else 'el-chip-equipment' }}">
+				{{ 'Drift detected' if drift.significant else 'No significant drift' }} (r = {{ drift.r }})
+			</span>
+			{% endif %}
+			{% if anomalies %}
+			<span class="el-chip el-chip-warn">{{ anomalies|length }} anomal{{ 'y' if anomalies|length == 1 else 'ies' }} flagged</span>
+			{% else %}
+			<span class="el-chip el-chip-equipment">No anomalies</span>
+			{% endif %}
+		</div>
+
+		{% if summary %}<p style="margin: 1em 0 0 0; color: #444;">{{ summary }}</p>{% endif %}
+
+		<ul class="el-milestones" style="margin-top: 1em;">
+			{% for p in points %}
+			<li>
+				<div class="el-milestone-body">
+					<span class="el-milestone-title">{{ p.name }}{% if p in anomalies %} &#9888;{% endif %}</span>
+					<span class="el-muted-note">{{ p.created_at.strftime('%Y-%m-%d') }} &middot; value = {{ p.value }} &middot; z = {{ p.z }}</span>
+				</div>
+			</li>
+			{% endfor %}
+		</ul>
+	</div>
+	{% endif %}
+
+	{% endif %}
+
+</div>
+
+<style>
+	.el-card { background: #fff; border: 1px solid #ececec; border-radius: 12px; padding: 1.5em 1.7em; margin-bottom: 1em; }
+	.el-form-card { background: #f7f7f7; border-color: #f0f0f0; }
+	.field { margin-bottom: 1.2em; }
+	.el-meta-row { display: flex; flex-wrap: wrap; gap: 0.4em; align-items: center; }
+	.el-chip { display: inline-block; background: #f1f1f1; color: #555; font-size: 0.8em; padding: 0.2em 0.75em; border-radius: 999px; margin-right: 0.4em; }
+	.el-chip-equipment { background: #eef1ee; color: #3f4f3f; }
+	.el-chip-warn { background: #fdf0e3; color: #a15c07; }
+	.el-milestones { list-style: none; margin: 0; padding: 0; }
+	.el-milestones li { padding: 0.4em 0; border-bottom: 1px solid #f1f1f1; }
+	.el-milestones li:last-child { border-bottom: none; }
+	.el-milestone-body { display: flex; justify-content: space-between; gap: 1em; }
+	.el-milestone-title { font-weight: 600; color: #333; }
+	.el-muted-note { color: #999; font-size: 0.85em; }
+	.el-empty { color: #999; }
+</style>
+{% endblock %}

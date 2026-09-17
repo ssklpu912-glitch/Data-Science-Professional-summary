@@ -5202,6 +5202,124 @@ def sample_correlate():
     )
 
 
+@app.route('/samples/drift')
+def sample_drift():
+    axes = _sample_property_axes()
+    axis = request.args.get('axis', '')
+    plot_filename = None
+    points = []
+    drift = None
+    anomalies = []
+    summary = None
+    error = None
+
+    if axis:
+        tech, prop = axis.split('|', 1)
+        rows = (
+            db.session.query(SampleProperty, Sample.name)
+            .join(Sample, SampleProperty.sample_id == Sample.id)
+            .filter(
+                Sample.user_id == session['user_id'],
+                SampleProperty.technique_name == tech,
+                SampleProperty.property_name == prop,
+            )
+            .order_by(SampleProperty.created_at)
+            .all()
+        )
+        points = [{'name': name, 'value': sp.value, 'created_at': sp.created_at} for sp, name in rows]
+
+        if len(points) < 4:
+            error = f"Only {len(points)} measurement(s) logged for this property — need at least 4 to check for drift or anomalies."
+        else:
+            t0 = points[0]['created_at']
+            days = np.array([(p['created_at'] - t0).total_seconds() / 86400 for p in points])
+            values = np.array([p['value'] for p in points])
+
+            # drift: does the value trend over time, or just wobble around a constant?
+            slope, intercept, r = 0.0, None, None
+            if np.ptp(days) > 0:
+                slope, intercept = np.polyfit(days, values, 1)
+                with np.errstate(invalid='ignore'):
+                    r = float(np.corrcoef(days, values)[0, 1])
+                if np.isnan(r):
+                    r = None
+            significant = r is not None and abs(r) >= 0.6
+            drift = {
+                'slope': float(slope), 'r': round(r, 3) if r is not None else None,
+                'direction': 'increasing' if slope > 0 else 'decreasing', 'significant': significant,
+            }
+
+            # anomalies: modified z-score (median/MAD) — robust to a single outlier skewing a
+            # plain mean/std the way it would with this few points
+            median = np.median(values)
+            mad = np.median(np.abs(values - median))
+            if mad > 0:
+                mod_z = 0.6745 * (values - median) / mad
+            else:
+                std = np.std(values)
+                mod_z = (values - np.mean(values)) / std if std > 0 else np.zeros_like(values)
+
+            for i, p in enumerate(points):
+                p['z'] = round(float(mod_z[i]), 2)
+                if abs(mod_z[i]) > 3.5:
+                    anomalies.append(p)
+
+            fig, ax = plt.subplots(figsize=(8, 5))
+            ax.plot(days, values, '-o', color='#2a6f2a', markersize=6, linewidth=1.4, zorder=2)
+            for i, p in enumerate(points):
+                if abs(mod_z[i]) > 3.5:
+                    ax.scatter([days[i]], [values[i]], color='#c0392b', s=120, zorder=4, marker='X')
+                ax.annotate(p['name'], (days[i], values[i]), fontsize=7, xytext=(5, 5),
+                            textcoords='offset points', color='#666')
+            if significant:
+                fit_x = np.linspace(days.min(), days.max(), 100)
+                ax.plot(fit_x, slope * fit_x + intercept, '--', color='#888', linewidth=1.3, zorder=1)
+            axis_label = next(a['label'] for a in axes if a['key'] == axis)
+            ax.set_xlabel('Days since first measurement')
+            ax.set_ylabel(axis_label)
+            ax.grid(alpha=0.25)
+            fig.tight_layout()
+
+            plot_filename = f"drift_{int(datetime.now().timestamp())}.png"
+            fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], plot_filename), dpi=130)
+            plt.close(fig)
+
+            parts = [
+                f"{len(points)} measurements of {prop} ({tech}) logged between "
+                f"{points[0]['created_at'].strftime('%Y-%m-%d')} and {points[-1]['created_at'].strftime('%Y-%m-%d')}."
+            ]
+            if significant:
+                span_days = float(np.ptp(days))
+                total_change = slope * span_days
+                if span_days >= 1:
+                    span_desc = f"{span_days:.1f} days"
+                elif span_days * 24 >= 1:
+                    span_desc = f"{span_days * 24:.1f} hours"
+                else:
+                    span_desc = f"{span_days * 24 * 60:.0f} minutes"
+                parts.append(
+                    f"Values show a {drift['direction']} drift over time (r = {drift['r']}), changing by "
+                    f"about {total_change:.4g} over the {span_desc} spanned by these measurements — worth "
+                    f"checking instrument calibration or sample stability if that's not expected."
+                )
+            elif r is not None:
+                parts.append(f"No significant drift over time (r = {drift['r']}) — values look stable.")
+            else:
+                parts.append("All measurements were logged on the same day, so a time trend can't be assessed yet.")
+            if anomalies:
+                names = ", ".join(f"{a['name']} ({a['value']:.4g})" for a in anomalies)
+                parts.append(f"{len(anomalies)} measurement(s) stand out as anomalous versus the rest: {names}.")
+            else:
+                parts.append("No individual measurements stand out as anomalous.")
+            summary = " ".join(parts)
+
+    return render_template(
+        'sample_drift.html',
+        axes=axes, axis=axis, plot_filename=plot_filename,
+        points=points, drift=drift, anomalies=anomalies, summary=summary, error=error,
+    )
+
+
 if __name__ == '__main__':
     if os.environ.get('PRODUCTION', '0').lower() in ('1', 'true', 'yes'):
         # Flask's own server (below) is explicitly unfit for production, even with
