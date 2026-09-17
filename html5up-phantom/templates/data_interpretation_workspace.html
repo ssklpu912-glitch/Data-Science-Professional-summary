@@ -329,6 +329,17 @@
 				<p style="margin: 0; font-size: 0.9em;">{{ overall_analysis }}</p>
 			</div>
 			{% endif %}
+			{% set shaped = results|selectattr('shape')|list %}
+			{% if shaped %}
+			<div style="background: #fff8e6; border-left: 4px solid #d4a017; border-radius: 6px; padding: 1em 1.2em; margin-bottom: 1.2em;">
+				<h3 style="margin: 0 0 0.5em 0; font-size: 1em;">Shape suggestions</h3>
+				<ul style="margin: 0; padding-left: 1.2em; font-size: 0.9em;">
+					{% for r in shaped %}
+					<li><strong>{{ r.label }}</strong> looks like {{ r.shape.friendly }} (R&sup2; &asymp; {{ '%.3f'|format(r.shape.r_squared) }} if fit).</li>
+					{% endfor %}
+				</ul>
+			</div>
+			{% endif %}
 			<details>
 				<summary style="cursor: pointer; color: #888; font-size: 0.85em; margin-bottom: 0.6em;">Per-file statistics</summary>
 				<div style="overflow-x: auto;">

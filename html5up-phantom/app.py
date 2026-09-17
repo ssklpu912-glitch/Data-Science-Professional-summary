@@ -1023,6 +1023,76 @@ FIT_FUNCTIONS = {
 }
 
 
+def power_fn(x, a, b):
+    return a * np.power(x, b)
+
+
+def logarithmic_fn(x, a, b):
+    return a * np.log(x) + b
+
+
+def langmuir_fn(x, a, b):
+    return (a * x) / (b + x)
+
+
+def sigmoid_fn(x, amplitude, k, x0, offset):
+    return amplitude / (1 + np.exp(-k * (x - x0))) + offset
+
+
+def suggest_curve_shape(x, y):
+    """Quietly tries a handful of canonical curve shapes against a raw X/Y series and
+    returns the best-fitting one, if any fits convincingly (R^2 >= 0.9) — a shape hint
+    the user never asked for and would otherwise only get by manually trying fit types
+    one at a time. Deliberately separate from FIT_FUNCTIONS (the explicit, user-selected
+    fit used elsewhere) so this stays a read-only suggestion, never changing what those
+    already-tested fit workflows do."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if len(x) < 6:
+        return None
+
+    x_range = float(x.max() - x.min())
+    y_range = float(y.max() - y.min())
+    if x_range == 0 or y_range == 0:
+        return None
+
+    candidates = []
+
+    def try_fit(shape, func, p0, friendly, needs_positive_x=False):
+        if needs_positive_x and np.any(x <= 0):
+            return
+        try:
+            popt, _ = curve_fit(func, x, y, p0=p0, maxfev=6000)
+            y_pred = func(x, *popt)
+            if not np.all(np.isfinite(y_pred)):
+                return
+            ss_res = np.sum((y - y_pred) ** 2)
+            ss_tot = np.sum((y - np.mean(y)) ** 2)
+            r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else None
+            if r_squared is not None and np.isfinite(r_squared):
+                candidates.append({'shape': shape, 'friendly': friendly, 'r_squared': float(r_squared)})
+        except (RuntimeError, ValueError, TypeError, OverflowError):
+            return
+
+    slope_guess = (y[-1] - y[0]) / (x[-1] - x[0]) if x[-1] != x[0] else 0.0
+    try_fit('linear', linear_fn, [slope_guess, y[0]], "a linear relationship")
+    try_fit('quadratic', quadratic_fn, [0.0, slope_guess, y[0]], "a quadratic (parabolic) relationship")
+    try_fit('exponential', exponential_fn, [y_range or 1.0, 1.0 / x_range, y.min()], "exponential growth or decay")
+    try_fit('power', power_fn, [1.0, 1.0], "a power-law relationship (y ∝ x^b)", needs_positive_x=True)
+    try_fit('logarithmic', logarithmic_fn, [y_range or 1.0, y.min()], "a logarithmic relationship", needs_positive_x=True)
+    try_fit('langmuir', langmuir_fn, [y.max(), x_range / 2 or 1.0],
+            "a Langmuir-type saturation curve — common for adsorption, binding, or surface-coverage data leveling off toward a plateau")
+    try_fit('sigmoid', sigmoid_fn, [y_range, 4.0 / x_range, np.median(x), y.min()],
+            "a sigmoidal (S-shaped) curve — common for dose-response, growth, or phase-transition data")
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda c: c['r_squared'], reverse=True)
+    best = candidates[0]
+    return best if best['r_squared'] >= 0.9 else None
+
+
 # AFM force-distance curve models (Mechanical tab: Hertz/DMT contact mechanics; Biological
 # tab: worm-like-chain for single-molecule force spectroscopy). Separate from FIT_FUNCTIONS
 # above because these need physical constants (tip radius) baked in via closures, not just
@@ -1884,12 +1954,12 @@ def dp_render_plot(state):
 
     results = []
 
-    def add_result(label, y_values, note=None):
+    def add_result(label, y_values, note=None, shape=None):
         stats = compute_series_stats(y_values)
         analysis = build_stats_analysis(label, stats, plot_type)
         if note:
             analysis = note + " " + analysis
-        results.append({'label': label, 'stats': stats, 'analysis': analysis})
+        results.append({'label': label, 'stats': stats, 'analysis': analysis, 'shape': shape})
 
     if plot_type == 'sankey_alluvial':
         ax.text(0.5, 0.5, "Sankey/Alluvial needs flow-structured data\n(source, target, value columns) —\nnot supported by simple X/Y column selection yet.",
@@ -2026,7 +2096,10 @@ def dp_render_plot(state):
             else:  # scatter_plot (default)
                 ax.scatter(s['x'], s['y'], s=fmt['marker_size'], color=color, alpha=0.8, label=s['label'])
 
-            add_result(s['label'], s['y'])
+            shape = None
+            if plot_type in ('scatter_plot', 'line_timeseries') and not state.get('derivative'):
+                shape = suggest_curve_shape(s['x'], s['y'])
+            add_result(s['label'], s['y'], shape=shape)
 
         if plot_type == 'bar_column':
             ax.set_xticks(range(len(series_list)))
