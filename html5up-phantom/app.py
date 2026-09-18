@@ -2194,7 +2194,7 @@ TECHNIQUE_TABS = {
     "CD (Circular Dichroism)": ["Select files", "Plot Spectrum", "Format", "Analysis"],
 
     "MALDI": ["Select files", "Plot Spectrum", "Peak Picking", "Format", "Analysis"],
-    "LC-MS": ["Select files", "Plot Spectrum", "Peak Picking", "Format", "Analysis"],
+    "LC-MS": ["Select files", "Chromatogram", "Formula ID", "Quantification", "Analysis"],
     "HPLC / GC": ["Select files", "Plot Chromatogram", "Peak Integration", "Format", "Analysis"],
     "GPC / SEC": ["Select files", "Plot Chromatogram", "Molecular Weight", "Format", "Analysis"],
 
@@ -2247,6 +2247,7 @@ TECHNIQUE_PLOT_MODES = {
         ("line_spectrum", "Thermal Denaturation Curve (Line Graph)"),
     ],
     "eds-edx": [("line_spectrum", "EDS/EDX Spectrum: Counts vs Energy (keV) (Line Graph)")],
+    "lc-ms": [("line_spectrum", "Chromatogram: Intensity vs Retention Time (Line Graph)")],
 }
 
 
@@ -2345,6 +2346,169 @@ EDS_TABLE = [
     (5.87, 5.93, "Mn Kα (Manganese)"), (6.37, 6.43, "Fe Kα (Iron)"), (6.90, 6.96, "Co Kα (Cobalt)"),
     (7.44, 7.50, "Ni Kα (Nickel)"), (8.02, 8.08, "Cu Kα (Copper)"), (8.60, 8.66, "Zn Kα (Zinc)"),
 ]
+
+# Common LC-MS ESI adducts: the mass added to a neutral molecule's monoisotopic mass to get
+# the observed m/z (accounts for the lost/gained electron on the charged species, not just
+# the adduct atom's neutral mass). {key: (display label, mass added in Da)}.
+LC_MS_ADDUCTS = {
+    'M': ('Neutral / already-deconvoluted mass', 0.0),
+    'M+H': ('[M+H]+  (positive ESI)', 1.007276),
+    'M-H': ('[M-H]-  (negative ESI)', -1.007276),
+    'M+Na': ('[M+Na]+  (positive ESI)', 22.989221),
+    'M+K': ('[M+K]+  (positive ESI)', 38.963158),
+    'M+NH4': ('[M+NH4]+  (positive ESI)', 18.033825),
+    'M+Cl': ('[M+Cl]-  (negative ESI)', 34.969402),
+}
+
+# Monoisotopic masses (Da) of the elements searched for molecular formula prediction from
+# accurate mass — scoped to organic small molecules/metabolites/peptide fragments, not
+# inorganics or intact proteins (formula search doesn't scale to protein-sized masses).
+LC_MS_ELEMENT_MASSES = {'C': 12.000000, 'H': 1.007825, 'N': 14.003074, 'O': 15.994915, 'P': 30.973762, 'S': 31.972071}
+
+
+def lc_ms_format_formula(c, h, n, o, p, s):
+    parts = []
+    for sym, count in (('C', c), ('H', h), ('N', n), ('O', o), ('P', p), ('S', s)):
+        if count > 0:
+            parts.append(sym if count == 1 else f"{sym}{count}")
+    return "".join(parts) or "—"
+
+
+def generate_formula_candidates(target_mass, tolerance_ppm=10.0, max_results=5):
+    """Heuristic molecular formula search from an accurate (neutral) mass: brute-force over
+    C/N/O/P/S counts in a small-molecule/peptide-scale range, solving for H analytically at
+    each combination, then filtering by degree-of-unsaturation (DBE) and H/C ratio sanity —
+    a simplified version of the standard 'seven golden rules' formula-validity heuristics
+    used by real formula-generation tools. This is a mass-only plausibility check, not a
+    spectral-library match, so multiple candidates near the same mass are expected; they are
+    ranked only by mass error (ppm), not by chemical likelihood."""
+    if target_mass is None or target_mass <= 0 or target_mass > 1500:
+        return []
+
+    m = LC_MS_ELEMENT_MASSES
+    tol_da = target_mass * tolerance_ppm / 1e6
+    c_max = min(80, int(target_mass / m['C']) + 1)
+    n_max = min(10, int(target_mass / m['N']) + 1)
+    o_max = min(25, int(target_mass / m['O']) + 1)
+    p_max = min(4, int(target_mass / m['P']) + 1)
+    s_max = min(4, int(target_mass / m['S']) + 1)
+
+    candidates = []
+    for c in range(0, c_max + 1):
+        base_c = c * m['C']
+        if base_c > target_mass + tol_da:
+            break
+        for n in range(0, n_max + 1):
+            base_cn = base_c + n * m['N']
+            if base_cn > target_mass + tol_da:
+                break
+            for o in range(0, o_max + 1):
+                base_cno = base_cn + o * m['O']
+                if base_cno > target_mass + tol_da:
+                    break
+                for p in range(0, p_max + 1):
+                    base_cnop = base_cno + p * m['P']
+                    if base_cnop > target_mass + tol_da:
+                        break
+                    for s in range(0, s_max + 1):
+                        base = base_cnop + s * m['S']
+                        if base > target_mass + tol_da:
+                            break
+                        h = round((target_mass - base) / m['H'])
+                        if h < 0 or h > 150 or (c == 0 and h == 0):
+                            continue
+                        mass = base + h * m['H']
+                        error_da = mass - target_mass
+                        if abs(error_da) > tol_da:
+                            continue
+                        dbe = c - h / 2 + n / 2 + 1
+                        if dbe < 0 or dbe > 40 or (dbe * 2) % 1 != 0:
+                            continue
+                        if c > 0 and not (0.1 <= h / c <= 3.2):
+                            continue
+                        candidates.append({
+                            'formula': lc_ms_format_formula(c, h, n, o, p, s),
+                            'mass': round(mass, 4),
+                            'error_ppm': round(1e6 * error_da / target_mass, 2),
+                            'dbe': dbe,
+                        })
+
+    candidates.sort(key=lambda cand: abs(cand['error_ppm']))
+    return candidates[:max_results]
+
+
+def lc_ms_extract_peak_table(files, max_peaks=20):
+    """Looks for an m/z (or 'mass') column plus an intensity/area column in each selected
+    tabular file — the feature/peak-list export format LC-MS software typically produces,
+    distinct from the plain retention-time-vs-intensity chromatogram the Chromatogram tab
+    plots. Returns the max_peaks most intense rows across all selected files, plus any
+    per-file errors (e.g. no recognizable m/z column)."""
+    rows = []
+    errors = []
+    for f in files:
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], f.stored_filename)
+        ext = os.path.splitext(f.stored_filename)[1].lower()
+        try:
+            df = read_tabular_file(
+                filepath, ext,
+                delimiter_override=DELIMITER_MAP.get(f.parse_delimiter or 'auto'),
+                header_row_override=f.parse_header_row,
+            )
+        except Exception as e:
+            errors.append(f"{f.original_filename}: {e}")
+            continue
+
+        mz_col = next((c for c in df.columns if re.search(r'm.?/?.?z|^mass$|monoisotopic', str(c), re.I)), None)
+        if not mz_col:
+            errors.append(f"{f.original_filename}: no m/z column detected (looked for a header containing 'm/z' or 'mass').")
+            continue
+        inten_col = next((c for c in df.columns if re.search(r'intensity|area|height|abundance', str(c), re.I)), None)
+        rt_col = next((c for c in df.columns if re.search(r'^rt$|retention', str(c), re.I)), None)
+
+        mz_vals = pd.to_numeric(df[mz_col], errors='coerce')
+        inten_vals = pd.to_numeric(df[inten_col], errors='coerce') if inten_col is not None else pd.Series([None] * len(df))
+        rt_vals = pd.to_numeric(df[rt_col], errors='coerce') if rt_col is not None else pd.Series([None] * len(df))
+
+        for i in range(len(df)):
+            mz = mz_vals.iloc[i]
+            if pd.isna(mz) or mz <= 0:
+                continue
+            rows.append({
+                'file_label': f.label or f.original_filename,
+                'mz': float(mz),
+                'intensity': float(inten_vals.iloc[i]) if pd.notna(inten_vals.iloc[i]) else None,
+                'rt': float(rt_vals.iloc[i]) if pd.notna(rt_vals.iloc[i]) else None,
+            })
+
+    rows.sort(key=lambda r: r['intensity'] if r['intensity'] is not None else -1, reverse=True)
+    return rows[:max_peaks], errors
+
+
+def lc_ms_parse_csv_lines(text, second_col_numeric_only=True):
+    """Parses 'a,b' per line (one pair per line, comma-separated) into (a, b) tuples,
+    skipping blank or malformed lines — used for the Quantification tab's plain-text
+    standards/unknowns entry, the same 'one item per line' convention Protocol steps use
+    elsewhere in this app."""
+    pairs = []
+    for line in (text or '').splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in line.split(',')]
+        if len(parts) < 2:
+            continue
+        try:
+            second = float(parts[1])
+        except ValueError:
+            continue
+        first = parts[0]
+        if second_col_numeric_only:
+            try:
+                first = float(first)
+            except ValueError:
+                continue
+        pairs.append((first, second))
+    return pairs
 
 
 def assign_peaks(peaks, table):
@@ -2694,15 +2858,17 @@ def technique_workspace(slug):
 
     # Spectroscopy techniques get the fully wired workflow; others still show the placeholder for now.
     # EDS/EDX is grouped under Microscopy & Imaging (it's acquired alongside SEM/TEM imaging) but is
-    # itself a spectrum (counts vs energy), so it reuses this same tabular/spectrum pipeline.
-    if parent_category == 'Spectroscopy' or technique_name == 'EDS/EDX':
+    # itself a spectrum (counts vs energy), and LC-MS is grouped under Mass & Separation but its
+    # Chromatogram tab is also just a spectrum-shaped X/Y plot — both reuse this same pipeline.
+    if parent_category == 'Spectroscopy' or technique_name in ('EDS/EDX', 'LC-MS'):
         state = tech_get_state(slug)
         all_files = DataFile.query.filter_by(file_type='tabular', technique_name=technique_name, user_id=session['user_id']).order_by(DataFile.uploaded_at.desc()).all()
         selected_files = [f for f in all_files if f.id in state['file_ids']]
         plot_modes = TECHNIQUE_PLOT_MODES.get(slug, [('line_spectrum', 'Line Graph')])
+        plot_tab_name = 'Chromatogram' if technique_name == 'LC-MS' else 'Plot Spectrum'
 
         plot_filename, results, plot_errors, peaks_by_label = (None, [], [], {})
-        if active_tab in ('Plot Spectrum', 'Peak Picking', 'Format', 'Analysis') and state['file_ids']:
+        if active_tab in (plot_tab_name, 'Peak Picking', 'Format', 'Analysis') and state['file_ids']:
             mark_peaks = (active_tab in ('Peak Picking', 'Analysis'))
             plot_filename, results, plot_errors, peaks_by_label = tech_render_spectrum_plot(state, mark_peaks=mark_peaks)
 
@@ -2713,6 +2879,28 @@ def technique_workspace(slug):
             else:
                 analysis_series, _ = dp_build_series(state)
             spectroscopy_analysis = generate_spectroscopy_analysis(technique_name, analysis_series)
+
+        formula_id = None
+        if technique_name == 'LC-MS' and active_tab == 'Formula ID':
+            adduct = request.args.get('adduct', 'M+H')
+            if adduct not in LC_MS_ADDUCTS:
+                adduct = 'M+H'
+            try:
+                tolerance_ppm = float(request.args.get('tolerance_ppm', 10))
+            except ValueError:
+                tolerance_ppm = 10.0
+            peaks, peak_errors = lc_ms_extract_peak_table(selected_files) if selected_files else ([], [])
+            adduct_shift = LC_MS_ADDUCTS[adduct][1]
+            for peak in peaks:
+                neutral_mass = peak['mz'] - adduct_shift
+                peak['neutral_mass'] = round(neutral_mass, 4)
+                peak['candidates'] = generate_formula_candidates(neutral_mass, tolerance_ppm)
+            formula_id = {
+                'adduct': adduct, 'tolerance_ppm': tolerance_ppm,
+                'peaks': peaks, 'errors': peak_errors, 'adducts': LC_MS_ADDUCTS,
+            }
+
+        quant_result = state.get('quant_result') if technique_name == 'LC-MS' else None
 
         return render_template(
             'technique_workspace_spectroscopy.html',
@@ -2726,11 +2914,14 @@ def technique_workspace(slug):
             all_files=all_files,
             selected_files=selected_files,
             plot_modes=plot_modes,
+            plot_tab_name=plot_tab_name,
             plot_filename=plot_filename,
             results=results,
             plot_errors=plot_errors,
             peaks_by_label=peaks_by_label,
             spectroscopy_analysis=spectroscopy_analysis,
+            formula_id=formula_id,
+            quant_result=quant_result,
             colormap_options=COLORMAP_OPTIONS,
             banner_image='images/characterizations-banner.png',
         )
@@ -2933,7 +3124,8 @@ def tech_select_files(slug):
 
     state['file_ids'] = new_file_ids
     tech_save_state(slug, state)
-    return redirect(url_for('technique_workspace', slug=slug, tab='Plot Spectrum'))
+    plot_tab_name = 'Chromatogram' if TECHNIQUE_SLUGS.get(slug) == 'LC-MS' else 'Plot Spectrum'
+    return redirect(url_for('technique_workspace', slug=slug, tab=plot_tab_name))
 
 
 @app.route('/characterizations/data/technique/<slug>/select-images', methods=['POST'])
@@ -2979,7 +3171,8 @@ def tech_set_plot(slug):
         state['smoothing']['polyorder'] = int(polyorder_str)
     state['wide_mode'] = request.form.get('wide_mode') == 'on'
     tech_save_state(slug, state)
-    return redirect(url_for('technique_workspace', slug=slug, tab='Plot Spectrum'))
+    plot_tab_name = 'Chromatogram' if TECHNIQUE_SLUGS.get(slug) == 'LC-MS' else 'Plot Spectrum'
+    return redirect(url_for('technique_workspace', slug=slug, tab=plot_tab_name))
 
 
 @app.route('/characterizations/data/technique/<slug>/set-peaks', methods=['POST'])
@@ -3017,6 +3210,60 @@ def tech_set_format(slug):
     state['format'] = fmt
     tech_save_state(slug, state)
     return redirect(url_for('technique_workspace', slug=slug, tab='Format'))
+
+
+@app.route('/characterizations/data/technique/<slug>/lcms-quantify', methods=['POST'])
+def lc_ms_quantify(slug):
+    state = tech_get_state(slug)
+    standards = lc_ms_parse_csv_lines(request.form.get('standards', ''), second_col_numeric_only=True)
+    unknowns = lc_ms_parse_csv_lines(request.form.get('unknowns', ''), second_col_numeric_only=False)
+
+    result = {'standards': standards, 'unknowns_raw': unknowns, 'error': None, 'plot_filename': None,
+              'slope': None, 'intercept': None, 'r2': None, 'unknowns': []}
+
+    if len(standards) < 2:
+        result['error'] = "Need at least 2 standards (concentration, peak area) to fit a calibration curve."
+    else:
+        conc = np.array([p[0] for p in standards], dtype=float)
+        area = np.array([p[1] for p in standards], dtype=float)
+        if np.ptp(conc) == 0:
+            result['error'] = "All standard concentrations are identical — can't fit a curve through a single point."
+        else:
+            slope, intercept = np.polyfit(conc, area, 1)
+            pred = slope * conc + intercept
+            ss_res = np.sum((area - pred) ** 2)
+            ss_tot = np.sum((area - np.mean(area)) ** 2)
+            r2 = 1 - ss_res / ss_tot if ss_tot != 0 else None
+            result['slope'] = float(slope)
+            result['intercept'] = float(intercept)
+            result['r2'] = round(float(r2), 4) if r2 is not None else None
+
+            for label, u_area in unknowns:
+                calc_conc = (u_area - intercept) / slope if slope != 0 else None
+                result['unknowns'].append({'label': label, 'area': u_area, 'concentration': calc_conc})
+
+            fig, ax = plt.subplots(figsize=(6.5, 5))
+            ax.scatter(conc, area, s=50, color='#2a6f2a', zorder=3, label='Standards')
+            fit_x = np.linspace(min(conc.min(), 0), conc.max() * 1.05, 100)
+            ax.plot(fit_x, slope * fit_x + intercept, '--', color='#888', linewidth=1.3, zorder=1, label='Calibration fit')
+            if result['unknowns']:
+                unk_conc = [u['concentration'] for u in result['unknowns'] if u['concentration'] is not None]
+                unk_area = [u['area'] for u in result['unknowns'] if u['concentration'] is not None]
+                if unk_conc:
+                    ax.scatter(unk_conc, unk_area, s=60, color='#c0392b', marker='D', zorder=4, label='Unknowns (calculated)')
+            ax.set_xlabel('Concentration')
+            ax.set_ylabel('Peak area')
+            ax.legend(fontsize=9)
+            ax.grid(alpha=0.25)
+            fig.tight_layout()
+            plot_filename = f"lcms_quant_{int(datetime.now().timestamp())}.png"
+            fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], plot_filename), dpi=130)
+            plt.close(fig)
+            result['plot_filename'] = plot_filename
+
+    state['quant_result'] = result
+    tech_save_state(slug, state)
+    return redirect(url_for('technique_workspace', slug=slug, tab='Quantification'))
 
 
 @app.route('/characterizations/data/workspace')

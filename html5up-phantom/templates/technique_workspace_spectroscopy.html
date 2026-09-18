@@ -124,7 +124,7 @@
 				<p style="color: #888; font-size: 0.9em;">No files imported yet.</p>
 			{% endif %}
 
-		{% elif active_tab == 'Plot Spectrum' %}
+		{% elif active_tab == plot_tab_name %}
 			{% if not selected_files %}
 				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
 			{% else %}
@@ -190,7 +190,7 @@
 			{% if not selected_files %}
 				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
 			{% elif state.plot_type == 'contour_2d' %}
-				<p style="color: #888; font-size: 0.9em;">Peak picking needs a 1D spectrum — switch modes in <strong>Plot Spectrum</strong>.</p>
+				<p style="color: #888; font-size: 0.9em;">Peak picking needs a 1D spectrum — switch modes in <strong>{{ plot_tab_name }}</strong>.</p>
 			{% else %}
 			<form method="POST" action="{{ url_for('tech_set_peaks', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em;">
 				<div class="field">
@@ -320,11 +320,124 @@
 			</form>
 			{% endif %}
 
+		{% elif active_tab == 'Formula ID' %}
+			{% if not selected_files %}
+				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+			{% else %}
+			<form method="GET" action="{{ url_for('technique_workspace', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+				<input type="hidden" name="tab" value="Formula ID" />
+				<div class="field">
+					<label for="adduct">Ionization / adduct</label>
+					<select id="adduct" name="adduct">
+						{% for key, info in formula_id.adducts.items() %}
+						<option value="{{ key }}" {{ 'selected' if key == formula_id.adduct else '' }}>{{ info[0] }}</option>
+						{% endfor %}
+					</select>
+				</div>
+				<div class="field">
+					<label for="tolerance_ppm">Mass tolerance (ppm)</label>
+					<input type="number" id="tolerance_ppm" name="tolerance_ppm" min="1" max="50" step="0.5" value="{{ formula_id.tolerance_ppm }}" />
+				</div>
+				<ul class="actions"><li><input type="submit" value="Search formulas" class="primary" /></li></ul>
+			</form>
+			<p style="font-size: 0.8em; color: #888; margin: -0.6em 0 1em 0;">Needs a column labeled m/z (or mass) in the selected file(s) — a peak/feature-list export, not a plain chromatogram. Formula candidates are a mass-only plausibility check (DBE + H/C sanity filters), not a spectral-library match — expect several candidates per peak, especially at higher mass.</p>
+
+			{% if formula_id.errors %}
+			<div style="background: #fdecea; color: #b3261e; padding: 0.7em 1em; border-radius: 8px; margin-bottom: 1em; font-size: 0.85em;">
+				{% for e in formula_id.errors %}<div>{{ e }}</div>{% endfor %}
+			</div>
+			{% endif %}
+
+			{% if formula_id.peaks %}
+			<div style="overflow-x: auto;">
+				<table style="width: 100%; border-collapse: collapse; font-size: 0.82em;">
+					<thead><tr>
+						<th style="text-align:left; padding: 0.4em;">File</th>
+						<th style="text-align:left; padding: 0.4em;">m/z</th>
+						<th style="text-align:left; padding: 0.4em;">RT</th>
+						<th style="text-align:left; padding: 0.4em;">Intensity</th>
+						<th style="text-align:left; padding: 0.4em;">Neutral mass</th>
+						<th style="text-align:left; padding: 0.4em;">Candidate formulas (error ppm, DBE)</th>
+					</tr></thead>
+					<tbody>
+						{% for p in formula_id.peaks %}
+						<tr>
+							<td style="padding: 0.4em; border-top: 1px solid #eee;">{{ p.file_label }}</td>
+							<td style="padding: 0.4em; border-top: 1px solid #eee;">{{ '%.4f' % p.mz }}</td>
+							<td style="padding: 0.4em; border-top: 1px solid #eee;">{{ '%.2f' % p.rt if p.rt is not none else '—' }}</td>
+							<td style="padding: 0.4em; border-top: 1px solid #eee;">{{ '%.3g' % p.intensity if p.intensity is not none else '—' }}</td>
+							<td style="padding: 0.4em; border-top: 1px solid #eee;">{{ p.neutral_mass }}</td>
+							<td style="padding: 0.4em; border-top: 1px solid #eee;">
+								{% if p.candidates %}
+									{% for c in p.candidates %}{{ c.formula }} ({{ c.error_ppm }} ppm, DBE {{ c.dbe }}){% if not loop.last %}; {% endif %}{% endfor %}
+								{% else %}
+									<span style="color: #999;">no candidate within tolerance</span>
+								{% endif %}
+							</td>
+						</tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			</div>
+			{% elif not formula_id.errors %}
+				<p style="color: #888; font-size: 0.9em;">No m/z peaks found in the selected file(s).</p>
+			{% endif %}
+			{% endif %}
+
+		{% elif active_tab == 'Quantification' %}
+			{% if not selected_files %}
+				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+			{% else %}
+			<form method="POST" action="{{ url_for('lc_ms_quantify', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+				<div class="field">
+					<label for="standards">Standards — one per line: concentration,peak area</label>
+					<textarea id="standards" name="standards" rows="5" placeholder="0.5,1200&#10;1.0,2350&#10;2.0,4800&#10;5.0,11900">{% if quant_result %}{% for c, a in quant_result.standards %}{{ c }},{{ a }}
+{% endfor %}{% endif %}</textarea>
+				</div>
+				<div class="field">
+					<label for="unknowns">Unknown samples — one per line: label,peak area</label>
+					<textarea id="unknowns" name="unknowns" rows="4" placeholder="Sample A,3100&#10;Sample B,7600">{% if quant_result %}{% for lbl, a in quant_result.unknowns_raw %}{{ lbl }},{{ a }}
+{% endfor %}{% endif %}</textarea>
+				</div>
+				<ul class="actions"><li><input type="submit" value="Fit calibration curve" class="primary" /></li></ul>
+			</form>
+			<p style="font-size: 0.8em; color: #888; margin: -0.6em 0 1em 0;">Fits a linear calibration curve (peak area vs concentration) through your standards, then back-calculates concentration for each unknown from its peak area. Not persisted — log any final values you want to keep in the sample's own record.</p>
+
+			{% if quant_result %}
+				{% if quant_result.error %}
+				<p style="color: #b3261e; font-size: 0.9em;">{{ quant_result.error }}</p>
+				{% else %}
+				<div style="background: #fff; border: 1px solid #ececec; border-radius: 10px; padding: 1.2em;">
+					{% if quant_result.plot_filename %}
+					<img src="{{ url_for('static', filename='uploads/' + quant_result.plot_filename) }}" alt="Calibration curve" style="max-width: 100%; border-radius: 8px;" />
+					{% endif %}
+					<p style="margin: 0.8em 0; font-size: 0.88em;">
+						Calibration: area = {{ '%.4g' % quant_result.slope }} × concentration + {{ '%.4g' % quant_result.intercept }} &nbsp;|&nbsp; R&sup2; = {{ quant_result.r2 }}
+					</p>
+					{% if quant_result.unknowns %}
+					<table style="width: 100%; border-collapse: collapse; font-size: 0.85em;">
+						<thead><tr><th style="text-align:left; padding: 0.3em;">Sample</th><th style="text-align:left; padding: 0.3em;">Peak area</th><th style="text-align:left; padding: 0.3em;">Calculated concentration</th></tr></thead>
+						<tbody>
+							{% for u in quant_result.unknowns %}
+							<tr>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ u.label }}</td>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ u.area }}</td>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ '%.4g' % u.concentration if u.concentration is not none else '—' }}</td>
+							</tr>
+							{% endfor %}
+						</tbody>
+					</table>
+					{% endif %}
+				</div>
+				{% endif %}
+			{% endif %}
+			{% endif %}
+
 		{% elif active_tab == 'Analysis' %}
 			{% if not selected_files %}
 				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
 			{% elif not results %}
-				<p style="color: #888; font-size: 0.9em;">No plot generated yet — visit <strong>Plot Spectrum</strong> first.</p>
+				<p style="color: #888; font-size: 0.9em;">No plot generated yet — visit <strong>{{ plot_tab_name }}</strong> first.</p>
 			{% else %}
 				{% if spectroscopy_analysis %}
 				<h3 style="margin: 0 0 0.6em 0; font-size: 1em;">Interpretation</h3>
@@ -365,7 +478,7 @@
 			</div>
 		{% else %}
 			<div style="background: #f7f7f7; border-radius: 10px; padding: 3em; text-align: center; color: #888;">
-				<p style="margin: 0;">No plot yet. Select files, then go to <strong>Plot Spectrum</strong> and click Plot.</p>
+				<p style="margin: 0;">No plot yet. Select files, then go to <strong>{{ plot_tab_name }}</strong> and click Plot.</p>
 			</div>
 		{% endif %}
 	</div>
