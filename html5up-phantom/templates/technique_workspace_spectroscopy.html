@@ -433,6 +433,97 @@
 			{% endif %}
 			{% endif %}
 
+		{% elif active_tab == 'PMF' %}
+			{% if not selected_files %}
+				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+			{% else %}
+			<form method="POST" action="{{ url_for('maldi_set_pmf', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+				<div class="field">
+					<label for="sequence">Candidate protein sequence (single-letter amino acid code)</label>
+					<textarea id="sequence" name="sequence" rows="4" placeholder="e.g. MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVK...">{{ pmf_result.settings.sequence if pmf_result else '' }}</textarea>
+				</div>
+				<div class="field">
+					<label for="missed_cleavages">Missed cleavages allowed</label>
+					<select id="missed_cleavages" name="missed_cleavages">
+						{% for n in [0, 1, 2, 3] %}
+						<option value="{{ n }}" {{ 'selected' if pmf_result and pmf_result.settings.missed_cleavages == n else '' }}>{{ n }}</option>
+						{% endfor %}
+					</select>
+				</div>
+				<div class="field">
+					<label for="tolerance_da">Mass tolerance (Da)</label>
+					<input type="number" id="tolerance_da" name="tolerance_da" min="0.01" max="2" step="0.01" value="{{ pmf_result.settings.tolerance_da if pmf_result else 0.3 }}" />
+				</div>
+				<ul class="actions"><li><input type="submit" value="Match against selected spectrum" class="primary" /></li></ul>
+			</form>
+			<p style="font-size: 0.8em; color: #888; margin: -0.6em 0 1em 0;">In-silico trypsin digest of the pasted sequence (cleaves after K/R, not before P), matched as [M+H]+ against the peaks detected on <strong>Peak Picking</strong>. This confirms/scores a candidate you already suspect — it isn't a database search against unknown proteins.</p>
+
+			{% if pmf_result %}
+			<div style="background: #fff; border: 1px solid #ececec; border-radius: 10px; padding: 1.2em;">
+				<div class="el-meta-row" style="display: flex; flex-wrap: wrap; gap: 0.4em; margin-bottom: 0.8em;">
+					<span style="background: #eef1ee; color: #3f4f3f; font-size: 0.8em; padding: 0.2em 0.75em; border-radius: 999px;">{{ pmf_result.sequence_length }} residues</span>
+					<span style="background: #eef1ee; color: #3f4f3f; font-size: 0.8em; padding: 0.2em 0.75em; border-radius: 999px;">{{ pmf_result.n_theoretical }} theoretical peptides</span>
+					<span style="background: #eef1ee; color: #3f4f3f; font-size: 0.8em; padding: 0.2em 0.75em; border-radius: 999px;">{{ pmf_result.n_observed }} observed peaks</span>
+					<span style="background: #eaf4ea; color: #2a6f2a; font-size: 0.8em; padding: 0.2em 0.75em; border-radius: 999px;">{{ pmf_result.matches|length }} matched</span>
+					<span style="background: #eaf4ea; color: #2a6f2a; font-size: 0.8em; padding: 0.2em 0.75em; border-radius: 999px;">{{ pmf_result.coverage_pct }}% sequence coverage</span>
+				</div>
+				{% if pmf_result.matches %}
+				<div style="overflow-x: auto;">
+					<table style="width: 100%; border-collapse: collapse; font-size: 0.82em;">
+						<thead><tr>
+							<th style="text-align:left; padding: 0.4em;">Position</th>
+							<th style="text-align:left; padding: 0.4em;">Peptide</th>
+							<th style="text-align:left; padding: 0.4em;">Theoretical [M+H]+</th>
+							<th style="text-align:left; padding: 0.4em;">Observed m/z</th>
+							<th style="text-align:left; padding: 0.4em;">Error (Da)</th>
+						</tr></thead>
+						<tbody>
+							{% for m in pmf_result.matches %}
+							<tr>
+								<td style="padding: 0.4em; border-top: 1px solid #eee;">{{ m.start }}–{{ m.end }}</td>
+								<td style="padding: 0.4em; border-top: 1px solid #eee; font-family: monospace;">{{ m.sequence }}</td>
+								<td style="padding: 0.4em; border-top: 1px solid #eee;">{{ m.theo_mz }}</td>
+								<td style="padding: 0.4em; border-top: 1px solid #eee;">{{ m.observed_mz }}</td>
+								<td style="padding: 0.4em; border-top: 1px solid #eee;">{{ m.error_da }}</td>
+							</tr>
+							{% endfor %}
+						</tbody>
+					</table>
+				</div>
+				{% elif pmf_result.sequence_length %}
+					<p style="color: #888; font-size: 0.9em;">No theoretical peptide matched an observed peak within tolerance.</p>
+				{% else %}
+					<p style="color: #888; font-size: 0.9em;">Paste a sequence above to run the digest and match.</p>
+				{% endif %}
+			</div>
+			{% endif %}
+			{% endif %}
+
+		{% elif active_tab == 'Imaging' %}
+			{% if not selected_files %}
+				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+			{% else %}
+			<p style="font-size: 0.85em; color: #555; margin-bottom: 1em;">Each selected file becomes one ion image — needs x, y, and intensity columns (one extracted ion's per-pixel intensity across the tissue/sample grid), not a plain spectrum. Renders automatically below.</p>
+			{% if imaging_result.errors %}
+			<div style="background: #fdecea; color: #b3261e; padding: 0.7em 1em; border-radius: 8px; margin-bottom: 1em; font-size: 0.85em;">
+				{% for e in imaging_result.errors %}<div>{{ e }}</div>{% endfor %}
+			</div>
+			{% endif %}
+			{% if imaging_result.images %}
+			<div style="display: flex; flex-wrap: wrap; gap: 1.2em;">
+				{% for img in imaging_result.images %}
+				<div style="background: #fff; border: 1px solid #ececec; border-radius: 10px; padding: 1em;">
+					<strong style="font-size: 0.88em;">{{ img.file_label }}</strong>
+					<span style="color: #888; font-size: 0.8em; margin-left: 0.4em;">({{ img.n_pixels }} pixels)</span>
+					<img src="{{ url_for('static', filename='uploads/' + img.plot_filename) }}" alt="Ion image" style="max-width: 100%; margin-top: 0.6em; border-radius: 6px;" />
+				</div>
+				{% endfor %}
+			</div>
+			{% elif not imaging_result.errors %}
+				<p style="color: #888; font-size: 0.9em;">No ion images generated yet.</p>
+			{% endif %}
+			{% endif %}
+
 		{% elif active_tab == 'Analysis' %}
 			{% if not selected_files %}
 				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>

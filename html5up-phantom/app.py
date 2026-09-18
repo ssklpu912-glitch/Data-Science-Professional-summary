@@ -2193,7 +2193,7 @@ TECHNIQUE_TABS = {
     "NMR (1H, 13C)": ["Select files", "Plot Spectrum", "Peak Picking", "Integration", "Format", "Analysis"],
     "CD (Circular Dichroism)": ["Select files", "Plot Spectrum", "Format", "Analysis"],
 
-    "MALDI": ["Select files", "Plot Spectrum", "Peak Picking", "Format", "Analysis"],
+    "MALDI": ["Select files", "Plot Spectrum", "Peak Picking", "PMF", "Imaging", "Format", "Analysis"],
     "LC-MS": ["Select files", "Chromatogram", "Formula ID", "Quantification", "Analysis"],
     "HPLC / GC": ["Select files", "Plot Chromatogram", "Peak Integration", "Format", "Analysis"],
     "GPC / SEC": ["Select files", "Plot Chromatogram", "Molecular Weight", "Format", "Analysis"],
@@ -2511,6 +2511,123 @@ def lc_ms_parse_csv_lines(text, second_col_numeric_only=True):
     return pairs
 
 
+# Standard monoisotopic residue masses (Da) — amino acid mass minus the water lost when it
+# joins a peptide chain. Used for in-silico tryptic digestion / peptide mass fingerprinting
+# (PMF) against a user-supplied candidate sequence. Free cysteine (no alkylation) and no
+# post-translational modifications — a plain baseline, same spirit as this app's other
+# 'starting interpretation, not definitive' reference tables.
+AA_MONO_MASS = {
+    'G': 57.02146, 'A': 71.03711, 'S': 87.03203, 'P': 97.05276, 'V': 99.06841,
+    'T': 101.04768, 'C': 103.00919, 'L': 113.08406, 'I': 113.08406, 'N': 114.04293,
+    'D': 115.02694, 'Q': 128.05858, 'K': 128.09496, 'E': 129.04259, 'M': 131.04049,
+    'H': 137.05891, 'F': 147.06841, 'R': 156.10111, 'Y': 163.06333, 'W': 186.07931,
+}
+WATER_MASS = 18.010565
+PROTON_MASS = 1.007276
+
+
+def tryptic_digest(sequence, missed_cleavages=1, min_length=4, max_length=50):
+    """In-silico trypsin digest: cleaves after K or R, except when followed by P (the
+    standard trypsin specificity exception). Generates every fragment allowed by the given
+    number of missed cleavages, same convention real PMF search tools use."""
+    seq = re.sub(r'[^A-Za-z]', '', sequence or '').upper()
+    if not seq:
+        return [], seq
+
+    sites = [0]
+    for i, aa in enumerate(seq):
+        if aa in ('K', 'R') and (i + 1 >= len(seq) or seq[i + 1] != 'P'):
+            sites.append(i + 1)
+    if sites[-1] != len(seq):
+        sites.append(len(seq))
+    sites = sorted(set(sites))
+
+    peptides = []
+    for i in range(len(sites) - 1):
+        for j in range(i + 1, min(i + 2 + missed_cleavages, len(sites))):
+            start, end = sites[i], sites[j]
+            pep_seq = seq[start:end]
+            if min_length <= len(pep_seq) <= max_length:
+                peptides.append({'sequence': pep_seq, 'start': start + 1, 'end': end})
+    return peptides, seq
+
+
+def peptide_mono_mass(pep_seq):
+    try:
+        return sum(AA_MONO_MASS[aa] for aa in pep_seq) + WATER_MASS
+    except KeyError:
+        return None
+
+
+def match_pmf(peptides, observed_mz, tolerance_da=0.3):
+    """Matches each theoretical tryptic peptide's [M+H]+ mass against the observed MALDI
+    peak list within a Da tolerance (MALDI PMF conventionally uses an absolute Da/mDa
+    tolerance, not ppm, since instrument resolution is roughly constant across the mass
+    range used here). Returns matches plus the set of covered sequence positions."""
+    matches = []
+    covered = set()
+    for pep in peptides:
+        mass = peptide_mono_mass(pep['sequence'])
+        if mass is None:
+            continue
+        theo_mz = mass + PROTON_MASS
+        best = None
+        for obs in observed_mz:
+            err = obs - theo_mz
+            if abs(err) <= tolerance_da and (best is None or abs(err) < abs(best[1])):
+                best = (obs, err)
+        if best:
+            matches.append({
+                'sequence': pep['sequence'], 'start': pep['start'], 'end': pep['end'],
+                'theo_mass': round(mass, 4), 'theo_mz': round(theo_mz, 4),
+                'observed_mz': best[0], 'error_da': round(best[1], 4),
+            })
+            covered.update(range(pep['start'], pep['end'] + 1))
+    matches.sort(key=lambda m: m['start'])
+    return matches, covered
+
+
+def maldi_extract_pixel_table(files):
+    """Looks for x, y, and intensity-like columns in each selected tabular file — the
+    per-pixel ion-intensity export a MALDI imaging workflow would produce for one extracted
+    ion, distinct from the plain spectrum the Plot Spectrum tab plots. Returns one entry per
+    file (not merged, since each file is one ion's image) plus any per-file errors."""
+    images = []
+    errors = []
+    for f in files:
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], f.stored_filename)
+        ext = os.path.splitext(f.stored_filename)[1].lower()
+        try:
+            df = read_tabular_file(
+                filepath, ext,
+                delimiter_override=DELIMITER_MAP.get(f.parse_delimiter or 'auto'),
+                header_row_override=f.parse_header_row,
+            )
+        except Exception as e:
+            errors.append(f"{f.original_filename}: {e}")
+            continue
+
+        x_col = next((c for c in df.columns if re.fullmatch(r'x|x.?pos(ition)?|x.?coord(inate)?', str(c).strip(), re.I)), None)
+        y_col = next((c for c in df.columns if re.fullmatch(r'y|y.?pos(ition)?|y.?coord(inate)?', str(c).strip(), re.I)), None)
+        inten_col = next((c for c in df.columns if re.search(r'intensity|abundance|count', str(c), re.I)), None)
+
+        if not (x_col is not None and y_col is not None and inten_col is not None):
+            errors.append(f"{f.original_filename}: needs x, y, and intensity columns for an ion image (found: {', '.join(str(c) for c in df.columns)}).")
+            continue
+
+        x = pd.to_numeric(df[x_col], errors='coerce').to_numpy()
+        y = pd.to_numeric(df[y_col], errors='coerce').to_numpy()
+        inten = pd.to_numeric(df[inten_col], errors='coerce').to_numpy()
+        mask = ~(np.isnan(x) | np.isnan(y) | np.isnan(inten))
+        x, y, inten = x[mask], y[mask], inten[mask]
+        if len(x) < 4:
+            errors.append(f"{f.original_filename}: fewer than 4 valid (x, y, intensity) rows — not enough for an image.")
+            continue
+
+        images.append({'file_label': f.label or f.original_filename, 'x': x, 'y': y, 'intensity': inten})
+    return images, errors
+
+
 def assign_peaks(peaks, table):
     """Matches each (x, y) peak against a reference range table, returns list of (x, y, description)."""
     assigned = []
@@ -2620,6 +2737,27 @@ def generate_spectroscopy_analysis(technique_name, series_list):
                 text = f"{len(peaks)} peak(s) detected but none matched a known characteristic X-ray line within tolerance."
             text += (" (Peak identification only, from standard reference line energies — not ZAF-corrected "
                      "quantification. Treat the % as a rough relative-abundance guide, not certified composition.)")
+            results.append({'label': s['label'], 'analysis': text})
+
+    elif technique_name == 'MALDI':
+        for s in series_list:
+            idx, _ = find_peaks(s['y'], prominence=(max(s['y']) - min(s['y'])) * 0.05 or None)
+            masses = s['x'][idx]
+            intensities = s['y'][idx]
+            if len(masses) >= 3:
+                # Mn/Mw/PDI from the peak list treated as an intensity-weighted mass distribution —
+                # the standard molecular-weight-average formulas, applied directly to MALDI peaks
+                # rather than a chromatographic elution profile (how GPC/SEC gets the same numbers).
+                mn = float(np.sum(intensities * masses) / np.sum(intensities))
+                mw = float(np.sum(intensities * masses ** 2) / np.sum(intensities * masses))
+                pdi = mw / mn if mn else None
+                spread = "narrow (near-monodisperse)" if pdi and pdi < 1.05 else (
+                    "moderately broad" if pdi and pdi < 1.2 else "broad")
+                text = (f"{len(masses)} peak(s) detected across {masses.min():.1f}–{masses.max():.1f} Da. "
+                        f"Mn ≈ {mn:.1f} Da, Mw ≈ {mw:.1f} Da, PDI (Mw/Mn) ≈ {pdi:.3f} — a {spread} mass distribution.")
+            else:
+                text = f"{len(masses)} peak(s) detected — need at least 3 resolved peaks to estimate Mn/Mw/PDI."
+            text += " (Treats MALDI peak intensities as relative population counts — a common approximation, though MALDI ionization efficiency isn't perfectly uniform across mass, so this skews toward better-ionizing species.)"
             results.append({'label': s['label'], 'analysis': text})
 
     return results
@@ -2858,9 +2996,10 @@ def technique_workspace(slug):
 
     # Spectroscopy techniques get the fully wired workflow; others still show the placeholder for now.
     # EDS/EDX is grouped under Microscopy & Imaging (it's acquired alongside SEM/TEM imaging) but is
-    # itself a spectrum (counts vs energy), and LC-MS is grouped under Mass & Separation but its
-    # Chromatogram tab is also just a spectrum-shaped X/Y plot — both reuse this same pipeline.
-    if parent_category == 'Spectroscopy' or technique_name in ('EDS/EDX', 'LC-MS'):
+    # itself a spectrum (counts vs energy), and LC-MS/MALDI are grouped under Mass & Separation but
+    # their base spectrum/chromatogram view is also just a spectrum-shaped X/Y plot — all three reuse
+    # this same pipeline, then layer their own extra tabs on top.
+    if parent_category == 'Spectroscopy' or technique_name in ('EDS/EDX', 'LC-MS', 'MALDI'):
         state = tech_get_state(slug)
         all_files = DataFile.query.filter_by(file_type='tabular', technique_name=technique_name, user_id=session['user_id']).order_by(DataFile.uploaded_at.desc()).all()
         selected_files = [f for f in all_files if f.id in state['file_ids']]
@@ -2868,8 +3007,8 @@ def technique_workspace(slug):
         plot_tab_name = 'Chromatogram' if technique_name == 'LC-MS' else 'Plot Spectrum'
 
         plot_filename, results, plot_errors, peaks_by_label = (None, [], [], {})
-        if active_tab in (plot_tab_name, 'Peak Picking', 'Format', 'Analysis') and state['file_ids']:
-            mark_peaks = (active_tab in ('Peak Picking', 'Analysis'))
+        if active_tab in (plot_tab_name, 'Peak Picking', 'PMF', 'Format', 'Analysis') and state['file_ids']:
+            mark_peaks = (active_tab in ('Peak Picking', 'PMF', 'Analysis'))
             plot_filename, results, plot_errors, peaks_by_label = tech_render_spectrum_plot(state, mark_peaks=mark_peaks)
 
         spectroscopy_analysis = []
@@ -2902,6 +3041,38 @@ def technique_workspace(slug):
 
         quant_result = state.get('quant_result') if technique_name == 'LC-MS' else None
 
+        pmf_result = None
+        if technique_name == 'MALDI' and active_tab == 'PMF':
+            pmf_settings = state.get('pmf', {'sequence': '', 'missed_cleavages': 1, 'tolerance_da': 0.3})
+            # observed masses are each peak's X position (m/z); peaks_by_label is {label: [(x, y), ...]}
+            observed_mz = sorted({round(px, 4) for peaks in peaks_by_label.values() for px, py in peaks})
+            peptides, clean_seq = tryptic_digest(pmf_settings['sequence'], pmf_settings['missed_cleavages'])
+            matches, covered = match_pmf(peptides, observed_mz, pmf_settings['tolerance_da'])
+            coverage_pct = round(100 * len(covered) / len(clean_seq), 1) if clean_seq else 0.0
+            pmf_result = {
+                'settings': pmf_settings, 'sequence_length': len(clean_seq),
+                'n_theoretical': len(peptides), 'n_observed': len(observed_mz),
+                'matches': matches, 'coverage_pct': coverage_pct,
+            }
+
+        imaging_result = None
+        if technique_name == 'MALDI' and active_tab == 'Imaging':
+            images, imaging_errors = maldi_extract_pixel_table(selected_files) if selected_files else ([], [])
+            plot_paths = []
+            for img in images:
+                fig, ax = plt.subplots(figsize=(6, 5))
+                sc = ax.scatter(img['x'], img['y'], c=img['intensity'], cmap='inferno', s=40, marker='s')
+                ax.set_xlabel('X'); ax.set_ylabel('Y')
+                ax.set_aspect('equal', adjustable='box')
+                ax.invert_yaxis()
+                fig.colorbar(sc, ax=ax, label='Intensity')
+                fig.tight_layout()
+                img_filename = f"maldi_ion_image_{int(datetime.now().timestamp())}_{len(plot_paths)}.png"
+                fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], img_filename), dpi=130)
+                plt.close(fig)
+                plot_paths.append({'file_label': img['file_label'], 'plot_filename': img_filename, 'n_pixels': len(img['x'])})
+            imaging_result = {'images': plot_paths, 'errors': imaging_errors}
+
         return render_template(
             'technique_workspace_spectroscopy.html',
             page_title=technique_name,
@@ -2922,6 +3093,8 @@ def technique_workspace(slug):
             spectroscopy_analysis=spectroscopy_analysis,
             formula_id=formula_id,
             quant_result=quant_result,
+            pmf_result=pmf_result,
+            imaging_result=imaging_result,
             colormap_options=COLORMAP_OPTIONS,
             banner_image='images/characterizations-banner.png',
         )
@@ -3264,6 +3437,26 @@ def lc_ms_quantify(slug):
     state['quant_result'] = result
     tech_save_state(slug, state)
     return redirect(url_for('technique_workspace', slug=slug, tab='Quantification'))
+
+
+@app.route('/characterizations/data/technique/<slug>/pmf-settings', methods=['POST'])
+def maldi_set_pmf(slug):
+    state = tech_get_state(slug)
+    try:
+        missed_cleavages = max(0, min(3, int(request.form.get('missed_cleavages', 1))))
+    except ValueError:
+        missed_cleavages = 1
+    try:
+        tolerance_da = float(request.form.get('tolerance_da', 0.3))
+    except ValueError:
+        tolerance_da = 0.3
+    state['pmf'] = {
+        'sequence': request.form.get('sequence', '').strip(),
+        'missed_cleavages': missed_cleavages,
+        'tolerance_da': tolerance_da,
+    }
+    tech_save_state(slug, state)
+    return redirect(url_for('technique_workspace', slug=slug, tab='PMF'))
 
 
 @app.route('/characterizations/data/workspace')
