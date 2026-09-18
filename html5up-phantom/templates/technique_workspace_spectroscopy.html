@@ -390,12 +390,20 @@
 			{% else %}
 			<form method="POST" action="{{ url_for('hplc_gc_set_rt_library', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
 				<div class="field">
-					<label for="rt_library_text">Retention-time library (optional) — one per line: name,retention time</label>
-					<textarea id="rt_library_text" name="rt_library_text" rows="4" placeholder="Caffeine,4.21&#10;Acetaminophen,2.85">{{ integration_result.rt_library_text if integration_result else '' }}</textarea>
+					<label for="rt_library_text">Compound library (optional) — one standard injection per line: name,retention time[,concentration,peak area]</label>
+					<textarea id="rt_library_text" name="rt_library_text" rows="6" placeholder="Caffeine,4.21,10,294.5&#10;Caffeine,4.19,20,589.0&#10;Caffeine,4.22,50,1472.1&#10;Acetaminophen,2.85">{{ integration_result.rt_library_text if integration_result else '' }}</textarea>
 				</div>
 				<ul class="actions"><li><input type="submit" value="Save library &amp; re-match" class="primary" /></li></ul>
 			</form>
-			<p style="font-size: 0.8em; color: #888; margin: -0.6em 0 1em 0;">Peaks are integrated valley-to-valley (area bounded by the nearest local minimum on each side, or the data edge). N (theoretical plates) uses the half-height-width formula; tailing factor is the USP 5%-height asymmetry; resolution is an approximation using half-height widths rather than base widths. There's no compound database here — a peak is only named if its retention time falls within 0.2 min of something in the library above, which is your own reference data from your own column and conditions.</p>
+			<p style="font-size: 0.8em; color: #888; margin: -0.6em 0 1em 0;">The classic workflow this mirrors: run a blank, then a multi-level standard series per compound (building its own calibration curve), identify each compound's retention time, then run the sample and match its peaks against those retention times. A peak is only named if its RT falls within 0.2 min of a library entry — there's no compound database, so this is only as good as the reference data you bring from your own column and conditions. Give a compound 2+ lines with concentration and peak area to fit its own calibration curve; matched sample peaks are then quantified with that compound's curve automatically. Peaks are integrated valley-to-valley; N (plates) uses the half-height-width formula; tailing factor is the USP 5%-height asymmetry; resolution is an approximation using half-height widths rather than base widths.</p>
+
+			{% if integration_result.calibrations %}
+			<div class="el-meta-row" style="display: flex; flex-wrap: wrap; gap: 0.4em; margin-bottom: 1em;">
+				{% for name, cal in integration_result.calibrations.items() %}
+				<span style="background: #eaf4ea; color: #2a6f2a; font-size: 0.8em; padding: 0.2em 0.75em; border-radius: 999px;">{{ name }}: n={{ cal.n }} standards, slope={{ '%.4g' % cal.slope }}</span>
+				{% endfor %}
+			</div>
+			{% endif %}
 
 			{% for series in integration_result.series %}
 			<div style="background: #fff; border: 1px solid #ececec; border-radius: 10px; padding: 1.1em; margin-bottom: 1em;">
@@ -409,6 +417,7 @@
 							<th style="text-align:left; padding: 0.3em;">Height</th>
 							<th style="text-align:left; padding: 0.3em;">Area</th>
 							<th style="text-align:left; padding: 0.3em;">% Area</th>
+							<th style="text-align:left; padding: 0.3em;">Concentration</th>
 							<th style="text-align:left; padding: 0.3em;">N (plates)</th>
 							<th style="text-align:left; padding: 0.3em;">Tailing</th>
 							<th style="text-align:left; padding: 0.3em;">Resolution</th>
@@ -421,6 +430,7 @@
 								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ '%.4g' % p.height }}</td>
 								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ '%.4g' % p.area }}</td>
 								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ p.pct_area if p.pct_area is not none else '—' }}</td>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ p.concentration if p.concentration is not none else '—' }}</td>
 								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ p.n_plates or '—' }}</td>
 								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ p.tailing or '—' }}</td>
 								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ p.resolution if p.resolution is not none else '—' }}</td>

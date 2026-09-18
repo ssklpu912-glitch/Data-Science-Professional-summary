@@ -2701,18 +2701,82 @@ def integrate_chromatogram_peaks(x, y, prominence=None, min_height=None):
     return peaks
 
 
-def match_retention_library(peaks, library, tolerance_min=0.2):
-    """Labels each integrated peak with the nearest name from a user-supplied retention-time
-    library (name, expected RT) if within tolerance — this app has no real compound database,
-    so identification here is only ever as good as the reference RTs the user brings in
-    themselves, run on their own column under their own conditions."""
+def parse_compound_library(text):
+    """Parses the Peak Integration compound library: one line per standard injection, as
+    'name,RT' for identification only, or 'name,RT,concentration,area' to also contribute one
+    calibration point for that compound — repeat the same name across several lines (one per
+    standard level) to build its own calibration curve, mirroring the classic HPLC workflow of
+    running a blank, then a multi-level standard series, before the unknown sample: identify
+    each sample peak by matching its retention time to a standard, then quantify it using that
+    specific compound's own calibration curve (not a single curve shared across every peak)."""
+    entries = []
+    for line in (text or '').splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in line.split(',')]
+        if len(parts) < 2:
+            continue
+        name = parts[0]
+        try:
+            rt = float(parts[1])
+        except ValueError:
+            continue
+        conc = area = None
+        if len(parts) >= 4:
+            try:
+                conc = float(parts[2])
+                area = float(parts[3])
+            except ValueError:
+                pass
+        entries.append({'name': name, 'rt': rt, 'conc': conc, 'area': area})
+    return entries
+
+
+def build_compound_calibrations(entries):
+    """Fits a per-compound linear calibration (area vs concentration) from whichever library
+    entries include calibration points — needs at least 2 same-named points to fit a line."""
+    by_name = {}
+    for e in entries:
+        if e['conc'] is not None and e['area'] is not None:
+            by_name.setdefault(e['name'], []).append((e['conc'], e['area']))
+    calibrations = {}
+    for name, pts in by_name.items():
+        if len(pts) >= 2:
+            conc = np.array([p[0] for p in pts])
+            area = np.array([p[1] for p in pts])
+            if np.ptp(conc) > 0:
+                slope, intercept = np.polyfit(conc, area, 1)
+                calibrations[name] = {'slope': float(slope), 'intercept': float(intercept), 'n': len(pts)}
+    return calibrations
+
+
+def match_retention_library(peaks, entries, tolerance_min=0.2, calibrations=None):
+    """Labels each integrated peak with the nearest compound name from a user-supplied
+    retention-time library if within tolerance — this app has no real compound database, so
+    identification here is only ever as good as the reference RTs the user brings in
+    themselves, run on their own column under their own conditions. If that compound has its
+    own fitted calibration, also back-calculates a concentration from the peak's area."""
+    name_rts = {}
+    for e in entries:
+        name_rts.setdefault(e['name'], []).append(e['rt'])
+    name_rt = {name: float(np.mean(rts)) for name, rts in name_rts.items()}
+    calibrations = calibrations or {}
+
     for p in peaks:
         best = None
-        for name, rt in library:
+        for name, rt in name_rt.items():
             diff = abs(p['rt'] - rt)
             if diff <= tolerance_min and (best is None or diff < best[1]):
                 best = (name, diff)
         p['name'] = best[0] if best else None
+        cal = calibrations.get(p['name']) if p['name'] else None
+        if cal and cal['slope']:
+            p['concentration'] = round((p['area'] - cal['intercept']) / cal['slope'], 4)
+            p['cal_n'] = cal['n']
+        else:
+            p['concentration'] = None
+            p['cal_n'] = None
     return peaks
 
 
@@ -3179,7 +3243,8 @@ def technique_workspace(slug):
         integration_result = None
         if technique_name == 'HPLC / GC' and active_tab == 'Peak Integration':
             rt_library_text = state.get('rt_library_text', '')
-            library = lc_ms_parse_csv_lines(rt_library_text, second_col_numeric_only=False)
+            library_entries = parse_compound_library(rt_library_text)
+            calibrations = build_compound_calibrations(library_entries)
             all_peaks = []
             if state.get('wide_mode'):
                 series_list, _, _ = tech_build_wide_series(state)
@@ -3191,10 +3256,10 @@ def technique_workspace(slug):
                     prominence=state['peaks'].get('prominence'),
                     min_height=state['peaks'].get('min_height'),
                 )
-                if library:
-                    peaks = match_retention_library(peaks, library)
+                if library_entries:
+                    peaks = match_retention_library(peaks, library_entries, calibrations=calibrations)
                 all_peaks.append({'label': s['label'], 'peaks': peaks})
-            integration_result = {'series': all_peaks, 'rt_library_text': rt_library_text}
+            integration_result = {'series': all_peaks, 'rt_library_text': rt_library_text, 'calibrations': calibrations}
 
         return render_template(
             'technique_workspace_spectroscopy.html',
