@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors
 from PIL import Image
 from scipy.optimize import curve_fit
-from scipy.signal import find_peaks, savgol_filter
+from scipy.signal import find_peaks, savgol_filter, peak_widths
 from skimage.filters import gaussian, threshold_otsu
 from skimage.morphology import remove_small_objects, remove_small_holes
 from skimage.measure import label, regionprops
@@ -2195,7 +2195,7 @@ TECHNIQUE_TABS = {
 
     "MALDI": ["Select files", "Plot Spectrum", "Peak Picking", "PMF", "Imaging", "Format", "Analysis"],
     "LC-MS": ["Select files", "Chromatogram", "Formula ID", "Quantification", "Analysis"],
-    "HPLC / GC": ["Select files", "Plot Chromatogram", "Peak Integration", "Format", "Analysis"],
+    "HPLC / GC": ["Select files", "Plot Chromatogram", "Peak Picking", "Peak Integration", "Quantification", "Format", "Analysis"],
     "GPC / SEC": ["Select files", "Plot Chromatogram", "Molecular Weight", "Format", "Analysis"],
 
     "SEM": ["Select images", "Measure Particles", "Porosity", "Roughness", "Analysis"],
@@ -2228,6 +2228,17 @@ def slugify_technique(name):
 
 TECHNIQUE_SLUGS = {slugify_technique(t): t for cat, techs in TECHNIQUE_CATEGORIES for t in techs}
 
+
+def spectrum_plot_tab_name(technique_name):
+    """The literal tab name each technique uses for its base spectrum/chromatogram plot —
+    shared spectrum-pipeline techniques mostly use 'Plot Spectrum', but the chromatography
+    ones use their own more accurate label."""
+    if technique_name == 'LC-MS':
+        return 'Chromatogram'
+    if technique_name == 'HPLC / GC':
+        return 'Plot Chromatogram'
+    return 'Plot Spectrum'
+
 # Plot modes allowed per technique, matching the Spectroscopy plot-type/graph-type table.
 # Each entry: (internal_plot_type, display_label)
 TECHNIQUE_PLOT_MODES = {
@@ -2248,6 +2259,7 @@ TECHNIQUE_PLOT_MODES = {
     ],
     "eds-edx": [("line_spectrum", "EDS/EDX Spectrum: Counts vs Energy (keV) (Line Graph)")],
     "lc-ms": [("line_spectrum", "Chromatogram: Intensity vs Retention Time (Line Graph)")],
+    "hplc-gc": [("line_spectrum", "Chromatogram: Detector Signal vs Retention Time (Line Graph)")],
 }
 
 
@@ -2628,6 +2640,82 @@ def maldi_extract_pixel_table(files):
     return images, errors
 
 
+def integrate_chromatogram_peaks(x, y, prominence=None, min_height=None):
+    """Detects peaks, then integrates each one valley-to-valley — area bounded by the local
+    minimum on either side (or the data edge for the first/last peak), the standard baseline
+    convention real chromatography integrators use, rather than an arbitrary height cutoff.
+    Also reports the standard column-performance metrics computed straight from each peak's
+    shape: theoretical plates N (from the half-height width) and USP tailing factor (from
+    the 5%-height front/back asymmetry), both via scipy's peak_widths."""
+    idx, _ = find_peaks(y, prominence=prominence, height=min_height)
+    if len(idx) == 0:
+        return []
+
+    idx = sorted(idx)
+    n = len(y)
+    xi = np.arange(n)
+
+    try:
+        widths_half, _, left_half, right_half = peak_widths(y, idx, rel_height=0.5)
+        _, _, left_5pct, right_5pct = peak_widths(y, idx, rel_height=0.95)
+    except Exception:
+        left_half = right_half = left_5pct = right_5pct = [None] * len(idx)
+
+    peaks = []
+    total_area = 0.0
+    for i, apex in enumerate(idx):
+        left_bound = 0 if i == 0 else idx[i - 1] + int(np.argmin(y[idx[i - 1]:apex + 1]))
+        right_bound = n - 1 if i == len(idx) - 1 else apex + int(np.argmin(y[apex:idx[i + 1] + 1]))
+        seg_x, seg_y = x[left_bound:right_bound + 1], y[left_bound:right_bound + 1]
+        baseline = min(seg_y[0], seg_y[-1])
+        area = float(np.trapezoid(np.clip(seg_y - baseline, 0, None), seg_x))
+
+        w_half = n_plates = tailing = None
+        if left_half[i] is not None:
+            left_x = float(np.interp(left_half[i], xi, x))
+            right_x = float(np.interp(right_half[i], xi, x))
+            w_half = right_x - left_x
+            if w_half > 0:
+                n_plates = 5.54 * (x[apex] / w_half) ** 2
+        if left_5pct[i] is not None:
+            front = x[apex] - float(np.interp(left_5pct[i], xi, x))
+            back = float(np.interp(right_5pct[i], xi, x)) - x[apex]
+            if front > 0:
+                tailing = (front + back) / (2 * front)
+
+        peaks.append({
+            'apex_idx': apex, 'rt': float(x[apex]), 'height': float(y[apex] - baseline),
+            'area': area, 'w_half': w_half,
+            'n_plates': round(n_plates) if n_plates else None,
+            'tailing': round(tailing, 2) if tailing else None,
+        })
+        total_area += area
+
+    for p in peaks:
+        p['pct_area'] = round(100 * p['area'] / total_area, 2) if total_area > 0 else None
+    peaks[0]['resolution'] = None
+    for i in range(1, len(peaks)):
+        w1, w2 = peaks[i - 1]['w_half'], peaks[i]['w_half']
+        peaks[i]['resolution'] = round(2 * (peaks[i]['rt'] - peaks[i - 1]['rt']) / (w1 + w2), 2) if (w1 and w2) else None
+
+    return peaks
+
+
+def match_retention_library(peaks, library, tolerance_min=0.2):
+    """Labels each integrated peak with the nearest name from a user-supplied retention-time
+    library (name, expected RT) if within tolerance — this app has no real compound database,
+    so identification here is only ever as good as the reference RTs the user brings in
+    themselves, run on their own column under their own conditions."""
+    for p in peaks:
+        best = None
+        for name, rt in library:
+            diff = abs(p['rt'] - rt)
+            if diff <= tolerance_min and (best is None or diff < best[1]):
+                best = (name, diff)
+        p['name'] = best[0] if best else None
+    return peaks
+
+
 def assign_peaks(peaks, table):
     """Matches each (x, y) peak against a reference range table, returns list of (x, y, description)."""
     assigned = []
@@ -2758,6 +2846,21 @@ def generate_spectroscopy_analysis(technique_name, series_list):
             else:
                 text = f"{len(masses)} peak(s) detected — need at least 3 resolved peaks to estimate Mn/Mw/PDI."
             text += " (Treats MALDI peak intensities as relative population counts — a common approximation, though MALDI ionization efficiency isn't perfectly uniform across mass, so this skews toward better-ionizing species.)"
+            results.append({'label': s['label'], 'analysis': text})
+
+    elif technique_name == 'HPLC / GC':
+        for s in series_list:
+            peaks = integrate_chromatogram_peaks(s['x'], s['y'], prominence=(max(s['y']) - min(s['y'])) * 0.05 or None)
+            if peaks:
+                total_area = sum(p['area'] for p in peaks)
+                top = sorted(peaks, key=lambda p: p['area'], reverse=True)[:3]
+                top_text = "; ".join(f"{p['rt']:.2f} min ({p['pct_area']}% area)" for p in top)
+                n_vals = [p['n_plates'] for p in peaks if p['n_plates']]
+                plates_text = f" Median theoretical plates ≈ {int(np.median(n_vals))}." if n_vals else ""
+                text = f"{len(peaks)} peak(s) integrated, total area {total_area:.4g}. Largest: {top_text}.{plates_text}"
+            else:
+                text = "No peaks detected at the current sensitivity — check Peak Picking settings."
+            text += " (See Peak Integration for the full per-peak table, including resolution and tailing factor.)"
             results.append({'label': s['label'], 'analysis': text})
 
     return results
@@ -2996,19 +3099,19 @@ def technique_workspace(slug):
 
     # Spectroscopy techniques get the fully wired workflow; others still show the placeholder for now.
     # EDS/EDX is grouped under Microscopy & Imaging (it's acquired alongside SEM/TEM imaging) but is
-    # itself a spectrum (counts vs energy), and LC-MS/MALDI are grouped under Mass & Separation but
-    # their base spectrum/chromatogram view is also just a spectrum-shaped X/Y plot — all three reuse
-    # this same pipeline, then layer their own extra tabs on top.
-    if parent_category == 'Spectroscopy' or technique_name in ('EDS/EDX', 'LC-MS', 'MALDI'):
+    # itself a spectrum (counts vs energy), and LC-MS/MALDI/HPLC-GC are grouped under Mass & Separation
+    # but their base spectrum/chromatogram view is also just a spectrum-shaped X/Y plot — all of them
+    # reuse this same pipeline, then layer their own extra tabs on top.
+    if parent_category == 'Spectroscopy' or technique_name in ('EDS/EDX', 'LC-MS', 'MALDI', 'HPLC / GC'):
         state = tech_get_state(slug)
         all_files = DataFile.query.filter_by(file_type='tabular', technique_name=technique_name, user_id=session['user_id']).order_by(DataFile.uploaded_at.desc()).all()
         selected_files = [f for f in all_files if f.id in state['file_ids']]
         plot_modes = TECHNIQUE_PLOT_MODES.get(slug, [('line_spectrum', 'Line Graph')])
-        plot_tab_name = 'Chromatogram' if technique_name == 'LC-MS' else 'Plot Spectrum'
+        plot_tab_name = spectrum_plot_tab_name(technique_name)
 
         plot_filename, results, plot_errors, peaks_by_label = (None, [], [], {})
-        if active_tab in (plot_tab_name, 'Peak Picking', 'PMF', 'Format', 'Analysis') and state['file_ids']:
-            mark_peaks = (active_tab in ('Peak Picking', 'PMF', 'Analysis'))
+        if active_tab in (plot_tab_name, 'Peak Picking', 'PMF', 'Peak Integration', 'Format', 'Analysis') and state['file_ids']:
+            mark_peaks = (active_tab in ('Peak Picking', 'PMF', 'Peak Integration', 'Analysis'))
             plot_filename, results, plot_errors, peaks_by_label = tech_render_spectrum_plot(state, mark_peaks=mark_peaks)
 
         spectroscopy_analysis = []
@@ -3039,7 +3142,7 @@ def technique_workspace(slug):
                 'peaks': peaks, 'errors': peak_errors, 'adducts': LC_MS_ADDUCTS,
             }
 
-        quant_result = state.get('quant_result') if technique_name == 'LC-MS' else None
+        quant_result = state.get('quant_result') if technique_name in ('LC-MS', 'HPLC / GC') else None
 
         pmf_result = None
         if technique_name == 'MALDI' and active_tab == 'PMF':
@@ -3073,6 +3176,26 @@ def technique_workspace(slug):
                 plot_paths.append({'file_label': img['file_label'], 'plot_filename': img_filename, 'n_pixels': len(img['x'])})
             imaging_result = {'images': plot_paths, 'errors': imaging_errors}
 
+        integration_result = None
+        if technique_name == 'HPLC / GC' and active_tab == 'Peak Integration':
+            rt_library_text = state.get('rt_library_text', '')
+            library = lc_ms_parse_csv_lines(rt_library_text, second_col_numeric_only=False)
+            all_peaks = []
+            if state.get('wide_mode'):
+                series_list, _, _ = tech_build_wide_series(state)
+            else:
+                series_list, _ = dp_build_series(state)
+            for s in series_list:
+                peaks = integrate_chromatogram_peaks(
+                    s['x'], s['y'],
+                    prominence=state['peaks'].get('prominence'),
+                    min_height=state['peaks'].get('min_height'),
+                )
+                if library:
+                    peaks = match_retention_library(peaks, library)
+                all_peaks.append({'label': s['label'], 'peaks': peaks})
+            integration_result = {'series': all_peaks, 'rt_library_text': rt_library_text}
+
         return render_template(
             'technique_workspace_spectroscopy.html',
             page_title=technique_name,
@@ -3095,6 +3218,7 @@ def technique_workspace(slug):
             quant_result=quant_result,
             pmf_result=pmf_result,
             imaging_result=imaging_result,
+            integration_result=integration_result,
             colormap_options=COLORMAP_OPTIONS,
             banner_image='images/characterizations-banner.png',
         )
@@ -3297,7 +3421,7 @@ def tech_select_files(slug):
 
     state['file_ids'] = new_file_ids
     tech_save_state(slug, state)
-    plot_tab_name = 'Chromatogram' if TECHNIQUE_SLUGS.get(slug) == 'LC-MS' else 'Plot Spectrum'
+    plot_tab_name = spectrum_plot_tab_name(TECHNIQUE_SLUGS.get(slug))
     return redirect(url_for('technique_workspace', slug=slug, tab=plot_tab_name))
 
 
@@ -3344,7 +3468,7 @@ def tech_set_plot(slug):
         state['smoothing']['polyorder'] = int(polyorder_str)
     state['wide_mode'] = request.form.get('wide_mode') == 'on'
     tech_save_state(slug, state)
-    plot_tab_name = 'Chromatogram' if TECHNIQUE_SLUGS.get(slug) == 'LC-MS' else 'Plot Spectrum'
+    plot_tab_name = spectrum_plot_tab_name(TECHNIQUE_SLUGS.get(slug))
     return redirect(url_for('technique_workspace', slug=slug, tab=plot_tab_name))
 
 
@@ -3385,58 +3509,83 @@ def tech_set_format(slug):
     return redirect(url_for('technique_workspace', slug=slug, tab='Format'))
 
 
-@app.route('/characterizations/data/technique/<slug>/lcms-quantify', methods=['POST'])
-def lc_ms_quantify(slug):
-    state = tech_get_state(slug)
-    standards = lc_ms_parse_csv_lines(request.form.get('standards', ''), second_col_numeric_only=True)
-    unknowns = lc_ms_parse_csv_lines(request.form.get('unknowns', ''), second_col_numeric_only=False)
-
+def fit_calibration_and_quantify(standards, unknowns, plot_prefix):
+    """Fits a linear calibration curve (peak area vs concentration) through pasted standards,
+    then back-calculates concentration for each pasted unknown from its peak area — the
+    external-standard quantification method, shared by LC-MS and HPLC/GC's Quantification
+    tabs since the math is identical regardless of separation technique."""
     result = {'standards': standards, 'unknowns_raw': unknowns, 'error': None, 'plot_filename': None,
               'slope': None, 'intercept': None, 'r2': None, 'unknowns': []}
 
     if len(standards) < 2:
         result['error'] = "Need at least 2 standards (concentration, peak area) to fit a calibration curve."
-    else:
-        conc = np.array([p[0] for p in standards], dtype=float)
-        area = np.array([p[1] for p in standards], dtype=float)
-        if np.ptp(conc) == 0:
-            result['error'] = "All standard concentrations are identical — can't fit a curve through a single point."
-        else:
-            slope, intercept = np.polyfit(conc, area, 1)
-            pred = slope * conc + intercept
-            ss_res = np.sum((area - pred) ** 2)
-            ss_tot = np.sum((area - np.mean(area)) ** 2)
-            r2 = 1 - ss_res / ss_tot if ss_tot != 0 else None
-            result['slope'] = float(slope)
-            result['intercept'] = float(intercept)
-            result['r2'] = round(float(r2), 4) if r2 is not None else None
+        return result
 
-            for label, u_area in unknowns:
-                calc_conc = (u_area - intercept) / slope if slope != 0 else None
-                result['unknowns'].append({'label': label, 'area': u_area, 'concentration': calc_conc})
+    conc = np.array([p[0] for p in standards], dtype=float)
+    area = np.array([p[1] for p in standards], dtype=float)
+    if np.ptp(conc) == 0:
+        result['error'] = "All standard concentrations are identical — can't fit a curve through a single point."
+        return result
 
-            fig, ax = plt.subplots(figsize=(6.5, 5))
-            ax.scatter(conc, area, s=50, color='#2a6f2a', zorder=3, label='Standards')
-            fit_x = np.linspace(min(conc.min(), 0), conc.max() * 1.05, 100)
-            ax.plot(fit_x, slope * fit_x + intercept, '--', color='#888', linewidth=1.3, zorder=1, label='Calibration fit')
-            if result['unknowns']:
-                unk_conc = [u['concentration'] for u in result['unknowns'] if u['concentration'] is not None]
-                unk_area = [u['area'] for u in result['unknowns'] if u['concentration'] is not None]
-                if unk_conc:
-                    ax.scatter(unk_conc, unk_area, s=60, color='#c0392b', marker='D', zorder=4, label='Unknowns (calculated)')
-            ax.set_xlabel('Concentration')
-            ax.set_ylabel('Peak area')
-            ax.legend(fontsize=9)
-            ax.grid(alpha=0.25)
-            fig.tight_layout()
-            plot_filename = f"lcms_quant_{int(datetime.now().timestamp())}.png"
-            fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], plot_filename), dpi=130)
-            plt.close(fig)
-            result['plot_filename'] = plot_filename
+    slope, intercept = np.polyfit(conc, area, 1)
+    pred = slope * conc + intercept
+    ss_res = np.sum((area - pred) ** 2)
+    ss_tot = np.sum((area - np.mean(area)) ** 2)
+    r2 = 1 - ss_res / ss_tot if ss_tot != 0 else None
+    result['slope'] = float(slope)
+    result['intercept'] = float(intercept)
+    result['r2'] = round(float(r2), 4) if r2 is not None else None
 
-    state['quant_result'] = result
+    for label, u_area in unknowns:
+        calc_conc = (u_area - intercept) / slope if slope != 0 else None
+        result['unknowns'].append({'label': label, 'area': u_area, 'concentration': calc_conc})
+
+    fig, ax = plt.subplots(figsize=(6.5, 5))
+    ax.scatter(conc, area, s=50, color='#2a6f2a', zorder=3, label='Standards')
+    fit_x = np.linspace(min(conc.min(), 0), conc.max() * 1.05, 100)
+    ax.plot(fit_x, slope * fit_x + intercept, '--', color='#888', linewidth=1.3, zorder=1, label='Calibration fit')
+    unk_conc = [u['concentration'] for u in result['unknowns'] if u['concentration'] is not None]
+    unk_area = [u['area'] for u in result['unknowns'] if u['concentration'] is not None]
+    if unk_conc:
+        ax.scatter(unk_conc, unk_area, s=60, color='#c0392b', marker='D', zorder=4, label='Unknowns (calculated)')
+    ax.set_xlabel('Concentration')
+    ax.set_ylabel('Peak area')
+    ax.legend(fontsize=9)
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    plot_filename = f"{plot_prefix}_quant_{int(datetime.now().timestamp())}.png"
+    fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], plot_filename), dpi=130)
+    plt.close(fig)
+    result['plot_filename'] = plot_filename
+    return result
+
+
+@app.route('/characterizations/data/technique/<slug>/lcms-quantify', methods=['POST'])
+def lc_ms_quantify(slug):
+    state = tech_get_state(slug)
+    standards = lc_ms_parse_csv_lines(request.form.get('standards', ''), second_col_numeric_only=True)
+    unknowns = lc_ms_parse_csv_lines(request.form.get('unknowns', ''), second_col_numeric_only=False)
+    state['quant_result'] = fit_calibration_and_quantify(standards, unknowns, 'lcms')
     tech_save_state(slug, state)
     return redirect(url_for('technique_workspace', slug=slug, tab='Quantification'))
+
+
+@app.route('/characterizations/data/technique/<slug>/hplc-gc-quantify', methods=['POST'])
+def hplc_gc_quantify(slug):
+    state = tech_get_state(slug)
+    standards = lc_ms_parse_csv_lines(request.form.get('standards', ''), second_col_numeric_only=True)
+    unknowns = lc_ms_parse_csv_lines(request.form.get('unknowns', ''), second_col_numeric_only=False)
+    state['quant_result'] = fit_calibration_and_quantify(standards, unknowns, 'hplcgc')
+    tech_save_state(slug, state)
+    return redirect(url_for('technique_workspace', slug=slug, tab='Quantification'))
+
+
+@app.route('/characterizations/data/technique/<slug>/rt-library', methods=['POST'])
+def hplc_gc_set_rt_library(slug):
+    state = tech_get_state(slug)
+    state['rt_library_text'] = request.form.get('rt_library_text', '').strip()
+    tech_save_state(slug, state)
+    return redirect(url_for('technique_workspace', slug=slug, tab='Peak Integration'))
 
 
 @app.route('/characterizations/data/technique/<slug>/pmf-settings', methods=['POST'])

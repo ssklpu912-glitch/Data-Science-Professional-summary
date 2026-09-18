@@ -384,11 +384,63 @@
 			{% endif %}
 			{% endif %}
 
+		{% elif active_tab == 'Peak Integration' %}
+			{% if not selected_files %}
+				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+			{% else %}
+			<form method="POST" action="{{ url_for('hplc_gc_set_rt_library', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+				<div class="field">
+					<label for="rt_library_text">Retention-time library (optional) — one per line: name,retention time</label>
+					<textarea id="rt_library_text" name="rt_library_text" rows="4" placeholder="Caffeine,4.21&#10;Acetaminophen,2.85">{{ integration_result.rt_library_text if integration_result else '' }}</textarea>
+				</div>
+				<ul class="actions"><li><input type="submit" value="Save library &amp; re-match" class="primary" /></li></ul>
+			</form>
+			<p style="font-size: 0.8em; color: #888; margin: -0.6em 0 1em 0;">Peaks are integrated valley-to-valley (area bounded by the nearest local minimum on each side, or the data edge). N (theoretical plates) uses the half-height-width formula; tailing factor is the USP 5%-height asymmetry; resolution is an approximation using half-height widths rather than base widths. There's no compound database here — a peak is only named if its retention time falls within 0.2 min of something in the library above, which is your own reference data from your own column and conditions.</p>
+
+			{% for series in integration_result.series %}
+			<div style="background: #fff; border: 1px solid #ececec; border-radius: 10px; padding: 1.1em; margin-bottom: 1em;">
+				<strong style="font-size: 0.9em;">{{ series.label }}</strong>
+				{% if series.peaks %}
+				<div style="overflow-x: auto; margin-top: 0.6em;">
+					<table style="width: 100%; border-collapse: collapse; font-size: 0.8em;">
+						<thead><tr>
+							<th style="text-align:left; padding: 0.3em;">RT</th>
+							<th style="text-align:left; padding: 0.3em;">Name</th>
+							<th style="text-align:left; padding: 0.3em;">Height</th>
+							<th style="text-align:left; padding: 0.3em;">Area</th>
+							<th style="text-align:left; padding: 0.3em;">% Area</th>
+							<th style="text-align:left; padding: 0.3em;">N (plates)</th>
+							<th style="text-align:left; padding: 0.3em;">Tailing</th>
+							<th style="text-align:left; padding: 0.3em;">Resolution</th>
+						</tr></thead>
+						<tbody>
+							{% for p in series.peaks %}
+							<tr>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ '%.3f' % p.rt }}</td>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ p.name or '—' }}</td>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ '%.4g' % p.height }}</td>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ '%.4g' % p.area }}</td>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ p.pct_area if p.pct_area is not none else '—' }}</td>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ p.n_plates or '—' }}</td>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ p.tailing or '—' }}</td>
+								<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ p.resolution if p.resolution is not none else '—' }}</td>
+							</tr>
+							{% endfor %}
+						</tbody>
+					</table>
+				</div>
+				{% else %}
+					<p style="color: #888; font-size: 0.85em; margin: 0.4em 0 0 0;">No peaks detected at the current sensitivity — check <strong>Peak Picking</strong> settings.</p>
+				{% endif %}
+			</div>
+			{% endfor %}
+			{% endif %}
+
 		{% elif active_tab == 'Quantification' %}
 			{% if not selected_files %}
 				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
 			{% else %}
-			<form method="POST" action="{{ url_for('lc_ms_quantify', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+			<form method="POST" action="{{ url_for('hplc_gc_quantify', slug=slug) if technique_name == 'HPLC / GC' else url_for('lc_ms_quantify', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
 				<div class="field">
 					<label for="standards">Standards — one per line: concentration,peak area</label>
 					<textarea id="standards" name="standards" rows="5" placeholder="0.5,1200&#10;1.0,2350&#10;2.0,4800&#10;5.0,11900">{% if quant_result %}{% for c, a in quant_result.standards %}{{ c }},{{ a }}
