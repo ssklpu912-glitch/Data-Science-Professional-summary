@@ -11,6 +11,10 @@ import time
 import secrets
 import json
 import shutil
+import hashlib
+import smtplib
+from email.message import EmailMessage
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 import logging
 from logging.handlers import RotatingFileHandler
 import requests
@@ -413,7 +417,7 @@ with app.app_context():
 # Every route requires a signed-in session except these — the pages you need
 # before you can have one, plus Flask's own static file server and the favicon
 # every browser requests automatically regardless of what page is loaded.
-PUBLIC_ENDPOINTS = {'index', 'register', 'login', 'static', 'favicon'}
+PUBLIC_ENDPOINTS = {'index', 'register', 'login', 'static', 'favicon', 'forgot_password', 'reset_password'}
 
 
 PRODUCTION_MODE = os.environ.get('PRODUCTION', '0').lower() in ('1', 'true', 'yes')
@@ -543,6 +547,100 @@ def logout():
     session.pop('user_name', None)
     session.pop('user_email', None)
     return redirect(url_for('index'))
+
+
+# ---- Password reset -------------------------------------------------------------------
+# Stateless signed tokens (no schema change): each token embeds the user id plus a
+# fingerprint of their *current* password hash, so it stops working the moment the password
+# changes — a reset link is single-use — and it also expires after an hour.
+
+PASSWORD_RESET_MAX_AGE = 3600
+_reset_serializer = URLSafeTimedSerializer(app.secret_key, salt='password-reset')
+
+
+def _password_fingerprint(user):
+    return hashlib.sha256(user.password.encode('utf-8')).hexdigest()[:16]
+
+
+def make_reset_token(user):
+    return _reset_serializer.dumps({'uid': user.id, 'fp': _password_fingerprint(user)})
+
+
+def user_from_reset_token(token):
+    try:
+        data = _reset_serializer.loads(token, max_age=PASSWORD_RESET_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        return None
+    user = db.session.get(User, data.get('uid'))
+    if user and data.get('fp') == _password_fingerprint(user):
+        return user
+    return None
+
+
+def send_reset_email(user, link):
+    """Emails the reset link via SMTP when SMTP_HOST is configured (SMTP_PORT, SMTP_USER,
+    SMTP_PASSWORD, MAIL_FROM). Returns True if it was actually sent. With no SMTP configured
+    the link is only written to the server log — fine for local development."""
+    host = os.environ.get('SMTP_HOST')
+    if not host:
+        app.logger.warning(f'SMTP not configured — password reset link for {user.email}: {link}')
+        return False
+    msg = EmailMessage()
+    msg['Subject'] = 'Reset your LabLogbook password'
+    msg['From'] = os.environ.get('MAIL_FROM') or os.environ.get('SMTP_USER') or 'no-reply@lablogbook.local'
+    msg['To'] = user.email
+    msg.set_content(
+        f"Hi {user.name},\n\nUse this link to choose a new LabLogbook password "
+        f"(valid for {PASSWORD_RESET_MAX_AGE // 60} minutes, one use):\n\n{link}\n\n"
+        "If you didn't ask for this, you can ignore this email — your password hasn't changed."
+    )
+    try:
+        with smtplib.SMTP(host, int(os.environ.get('SMTP_PORT', 587)), timeout=10) as smtp:
+            smtp.starttls()
+            if os.environ.get('SMTP_USER'):
+                smtp.login(os.environ['SMTP_USER'], os.environ.get('SMTP_PASSWORD', ''))
+            smtp.send_message(msg)
+        return True
+    except Exception:
+        app.logger.exception('Sending password reset email failed')
+        return False
+
+
+@app.route('/forgot-password', methods=['GET', 'POST'])
+def forgot_password():
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip()
+        user = User.query.filter_by(email=email).first()
+        dev_link = None
+        if user:
+            link = url_for('reset_password', token=make_reset_token(user), _external=True)
+            sent = send_reset_email(user, link)
+            # Only ever shown on-page for local development (no SMTP, dev mode on) — showing it
+            # in production would let anyone reset any account just by knowing its email.
+            if not sent and not PRODUCTION_MODE and (DEBUG_MODE or DEV_AUTOLOGIN_EMAIL):
+                dev_link = link
+        # Same response whether or not the email is registered, so this page can't be used
+        # to discover who has an account.
+        return render_template('forgot_password.html', submitted=True, dev_link=dev_link)
+    return render_template('forgot_password.html', submitted=False)
+
+
+@app.route('/reset-password/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    user = user_from_reset_token(token)
+    if not user:
+        return render_template('reset_password.html', invalid=True), 400
+    if request.method == 'POST':
+        password = request.form.get('password', '')
+        if password != request.form.get('confirm_password', ''):
+            return render_template('reset_password.html', error="The two passwords don't match.")
+        password_error = validate_password(password)
+        if password_error:
+            return render_template('reset_password.html', error=password_error)
+        user.password = generate_password_hash(password)
+        db.session.commit()
+        return render_template('reset_password.html', done=True)
+    return render_template('reset_password.html')
 
 
 STATUS_OPTIONS = ["In progress", "Completed", "Failed", "Repeat needed"]
