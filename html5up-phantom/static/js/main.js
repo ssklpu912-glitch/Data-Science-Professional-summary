@@ -242,3 +242,71 @@ document.addEventListener('DOMContentLoaded', function () {
 		if (method === 'POST') addCsrfToken(forms[i]);
 	}
 });
+
+/* Password fields: adds a Show/Hide toggle to every password .form-input, and — where the
+   field carries data-pw-rules — a live requirements checklist and strength bar. The rules
+   here mirror validate_password() in app.py, which is what actually enforces them. */
+document.addEventListener('DOMContentLoaded', function () {
+	document.querySelectorAll('input[type="password"].form-input').forEach(function (input) {
+		var wrap = document.createElement('div');
+		wrap.className = 'pw-wrap';
+		input.parentNode.insertBefore(wrap, input);
+		wrap.appendChild(input);
+
+		var toggle = document.createElement('button');
+		toggle.type = 'button';
+		toggle.className = 'pw-toggle';
+		toggle.textContent = 'Show';
+		toggle.setAttribute('aria-label', 'Show password');
+		toggle.addEventListener('click', function () {
+			var showing = input.type === 'text';
+			input.type = showing ? 'password' : 'text';
+			toggle.textContent = showing ? 'Show' : 'Hide';
+			toggle.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+		});
+		wrap.appendChild(toggle);
+
+		if (input.hasAttribute('data-pw-rules')) {
+			var rules = [
+				['At least 8 characters', function (v) { return v.length >= 8; }],
+				['At least one letter', function (v) { return /[A-Za-z]/.test(v); }],
+				['At least one number', function (v) { return /[0-9]/.test(v); }]
+			];
+			var list = document.createElement('ul');
+			list.className = 'pw-rules';
+			var items = rules.map(function (r) {
+				var li = document.createElement('li');
+				li.textContent = r[0];
+				list.appendChild(li);
+				return li;
+			});
+			var meter = document.createElement('div');
+			meter.className = 'pw-strength';
+			var bar = document.createElement('span');
+			meter.appendChild(bar);
+			var note = document.createElement('p');
+			note.className = 'pw-hint';
+			note.textContent = 'Longer is stronger — a symbol, mixed case, or 12+ characters makes it harder to guess.';
+			wrap.parentNode.appendChild(meter);
+			wrap.parentNode.appendChild(list);
+			wrap.parentNode.appendChild(note);
+
+			input.addEventListener('input', function () {
+				var v = input.value;
+				var met = 0;
+				rules.forEach(function (r, i) {
+					var ok = r[1](v);
+					items[i].classList.toggle('ok', ok);
+					if (ok) met++;
+				});
+				var score = met;
+				if (v.length >= 12) score++;
+				if (/[^A-Za-z0-9]/.test(v)) score++;
+				if (/[a-z]/.test(v) && /[A-Z]/.test(v)) score++;
+				var pct = Math.min(score / 6, 1) * 100;
+				bar.style.width = (v ? pct : 0) + '%';
+				bar.style.background = pct < 45 ? '#c0392b' : (pct < 80 ? '#d4a017' : '#2a6f2a');
+			});
+		}
+	});
+});

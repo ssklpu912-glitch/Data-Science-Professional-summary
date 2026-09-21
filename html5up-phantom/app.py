@@ -483,6 +483,18 @@ def index():
     return render_template('index.html', banner_image='images/homepage-banner.png')
 
 
+def validate_password(password):
+    """Sign-up password rules — kept in step with the checklist in static/js/main.js.
+    Applies to new accounts only; existing passwords are never re-checked at sign-in."""
+    if len(password) < 8:
+        return "Password must be at least 8 characters."
+    if not re.search(r'[A-Za-z]', password):
+        return "Password must include at least one letter."
+    if not re.search(r'[0-9]', password):
+        return "Password must include at least one number."
+    return None
+
+
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
@@ -493,8 +505,9 @@ def register():
         if User.query.filter_by(email=email).first():
             return render_template('register.html', error="An account with this email already exists.")
 
-        if len(password) < 8:
-            return render_template('register.html', error="Password must be at least 8 characters.")
+        password_error = validate_password(password)
+        if password_error:
+            return render_template('register.html', error=password_error)
 
         hashed_pw = generate_password_hash(password)
         new_user = User(name=name, email=email, password=hashed_pw)
