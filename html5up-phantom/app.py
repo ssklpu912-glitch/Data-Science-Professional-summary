@@ -416,8 +416,38 @@ with app.app_context():
 PUBLIC_ENDPOINTS = {'index', 'register', 'login', 'static', 'favicon'}
 
 
+PRODUCTION_MODE = os.environ.get('PRODUCTION', '0').lower() in ('1', 'true', 'yes')
+
+# Local-development convenience only: DEV_AUTOLOGIN=<email> signs every browser in as that
+# user (created on first use) so the developer can skip the sign-in screen. Hard-disabled
+# whenever PRODUCTION is set, since it bypasses authentication entirely.
+DEV_AUTOLOGIN_EMAIL = os.environ.get('DEV_AUTOLOGIN', '').strip().lower() or None
+if DEV_AUTOLOGIN_EMAIL and PRODUCTION_MODE:
+    DEV_AUTOLOGIN_EMAIL = None
+if DEV_AUTOLOGIN_EMAIL:
+    app.logger.warning(f'DEV_AUTOLOGIN is ON — every visitor is signed in as {DEV_AUTOLOGIN_EMAIL}. Local development only.')
+
+
 @app.before_request
 def require_login():
+    if DEV_AUTOLOGIN_EMAIL and 'user_id' not in session and request.endpoint not in (None, 'static'):
+        dev_user = User.query.filter_by(email=DEV_AUTOLOGIN_EMAIL).first()
+        if not dev_user:
+            dev_user = User(
+                name='Dev User', email=DEV_AUTOLOGIN_EMAIL,
+                password=generate_password_hash(secrets.token_urlsafe(32)),
+            )
+            db.session.add(dev_user)
+            try:
+                db.session.commit()
+            except Exception:
+                # another concurrent request created it first
+                db.session.rollback()
+                dev_user = User.query.filter_by(email=DEV_AUTOLOGIN_EMAIL).first()
+        session['user_id'] = dev_user.id
+        session['user_name'] = dev_user.name
+        session['user_email'] = dev_user.email
+
     if request.endpoint in PUBLIC_ENDPOINTS or request.endpoint is None:
         return
     if 'user_id' not in session:
