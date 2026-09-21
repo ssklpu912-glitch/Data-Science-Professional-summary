@@ -10,6 +10,7 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
 		<meta name="csrf-token" content="{{ csrf_token() }}" />
+		{% if session.get('user_email') %}<meta name="signed-in-email" content="{{ session['user_email'] }}" />{% endif %}
 		<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='images/lablogbook-logo1.svg') }}" />
 		<link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}" />
 		<noscript><link rel="stylesheet" href="{{ url_for('static', filename='css/noscript.css') }}" /></noscript>

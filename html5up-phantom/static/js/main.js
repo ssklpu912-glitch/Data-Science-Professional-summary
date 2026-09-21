@@ -310,3 +310,33 @@ document.addEventListener('DOMContentLoaded', function () {
 		}
 	});
 });
+
+/* Remembered emails: once someone is signed in, their email is kept in this browser only
+   (localStorage — never sent anywhere) so the sign-in email box can offer it next time,
+   alongside whatever the browser's own password manager suggests. The server deliberately
+   never lists registered accounts, which would let anyone enumerate users. */
+document.addEventListener('DOMContentLoaded', function () {
+	var KEY = 'lablogbook.recentEmails';
+	function load() {
+		try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { return []; }
+	}
+	var meta = document.querySelector('meta[name="signed-in-email"]');
+	if (meta) {
+		var emails = load().filter(function (e) { return e !== meta.content; });
+		emails.unshift(meta.content);
+		try { localStorage.setItem(KEY, JSON.stringify(emails.slice(0, 5))); } catch (e) {}
+	}
+	document.querySelectorAll('input[data-remembered-emails]').forEach(function (input) {
+		var saved = load();
+		if (!saved.length) return;
+		var list = document.createElement('datalist');
+		list.id = 'remembered-emails-' + Math.random().toString(36).slice(2);
+		saved.forEach(function (e) {
+			var o = document.createElement('option');
+			o.value = e;
+			list.appendChild(o);
+		});
+		input.setAttribute('list', list.id);
+		input.parentNode.appendChild(list);
+	});
+});
