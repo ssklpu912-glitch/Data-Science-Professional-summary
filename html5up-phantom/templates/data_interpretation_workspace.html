@@ -87,10 +87,14 @@
 			</form>
 		</div>
 
-		{% if all_files %}
+		{% set real_files = all_files|rejectattr('is_simulated')|list %}
+		{% if real_files|length < all_files|length %}
+		<p style="font-size: 0.82em; color: #888; margin: 0 0 0.8em 0;">Your {{ all_files|length - real_files|length }} simulated file(s) are kept apart from real data &mdash; pick them in the <a href="{{ url_for('data_interpretation_workspace', tab='simulate') }}">Simulate</a> tab.</p>
+		{% endif %}
+		{% if real_files %}
 		<form method="POST" action="{{ url_for('dp_select_files') }}">
 			<div style="max-height: 380px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 0.8em; margin-bottom: 1em;">
-				{% for f in all_files %}
+				{% for f in real_files %}
 				<div class="dp-file-row" data-file-id="{{ f.id }}"
 					 onclick="toggleDpFile({{ f.id }})"
 					 style="display: flex; align-items: center; gap: 0.6em; padding: 0.5em 0.3em; border-bottom: 1px solid #eee; cursor: pointer; user-select: none; border-radius: 6px; font-size: 0.9em; {% if f.id in state.file_ids %}background: #eaeaea;{% endif %}">
@@ -412,19 +416,65 @@
 				render();
 			})();
 		</script>
-		{% if simulated_files %}
-		<h3 style="margin: 1.2em 0 0.6em 0; font-size: 1em;">Your simulated curves</h3>
-		{% for item in simulated_files %}
-		<div style="background: #fff; border: 1px solid #ececec; border-radius: 8px; padding: 0.8em 1em; margin-bottom: 0.7em;">
-			<strong style="font-size: 0.88em;">{{ item.file.label }}</strong>
-			<span style="background: #fff8e6; color: #8a6210; font-size: 0.72em; font-weight: 700; padding: 0.15em 0.6em; border-radius: 999px; margin-left: 0.3em;">Simulated</span>
-			<details style="margin-top: 0.4em;">
-				<summary style="cursor: pointer; color: #888; font-size: 0.82em;">Reveal answer key</summary>
-				<ul style="margin: 0.5em 0 0 0; padding-left: 1.2em; font-size: 0.82em; color: #444;">{% for line in item.key %}<li>{{ line }}</li>{% endfor %}</ul>
-			</details>
-		</div>
-		{% endfor %}
-		{% endif %}
+			<h3 style="margin: 1.6em 0 0.4em 0; font-size: 1.05em;">Select simulated files</h3>
+			{% if simulated_files %}
+			<p style="font-size: 0.82em; color: #888; margin: 0 0 0.8em 0;">Your simulated data lives here, separate from real uploads. Tick one or more and use them &mdash; this replaces your current file selection.</p>
+			<form method="POST" action="{{ url_for('dp_select_files') }}">
+				<div style="max-height: 420px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 0.4em 0.8em; margin-bottom: 1em;">
+					{% for item in simulated_files %}
+					<div style="padding: 0.6em 0; border-bottom: 1px solid #eee;">
+						<label style="display: flex; align-items: center; gap: 0.6em; cursor: pointer; font-size: 0.9em;">
+							<input type="checkbox" name="file_ids" value="{{ item.file.id }}" {% if item.file.id in state.file_ids %}checked{% endif %} />
+							<span style="flex: 1;"><strong>{{ item.file.label }}</strong>
+								<span style="background: #fff8e6; color: #8a6210; font-size: 0.72em; font-weight: 700; padding: 0.15em 0.6em; border-radius: 999px; margin-left: 0.3em;">Simulated</span>
+								{% if item.file.id in state.file_ids %}<span style="color: #4caf50; font-size: 0.78em; margin-left: 0.4em;">in use</span>{% endif %}</span>
+							<button type="button" onclick="event.preventDefault(); simDeleteFile({{ item.file.id }}, this);" title="Delete this simulated file"
+									style="background: none; border: none; color: #b3261e; cursor: pointer; font-size: 1em; padding: 0.2em 0.5em;">&#10005;</button>
+						</label>
+						<details style="margin: 0.3em 0 0 2.2em;">
+							<summary style="cursor: pointer; color: #888; font-size: 0.8em;">Reveal answer key</summary>
+							<ul style="margin: 0.4em 0 0 0; padding-left: 1.2em; font-size: 0.8em; color: #444;">{% for line in item.key %}<li>{{ line }}</li>{% endfor %}</ul>
+						</details>
+					</div>
+					{% endfor %}
+				</div>
+				<ul class="actions">
+					<li><input type="submit" value="Use selected simulated files &rarr;" class="primary" /></li>
+					<li><button type="button" onclick="simBulkDelete(this)" class="button" style="background: #2b6cb0 !important; box-shadow: none !important; color: #fff !important;">Delete selected</button></li>
+				</ul>
+			</form>
+			<script>
+				function simPost(action, fields, ids) {
+					var form = document.createElement('form');
+					form.method = 'POST'; form.action = action;
+					Object.keys(fields).forEach(function (name) {
+						var input = document.createElement('input');
+						input.type = 'hidden'; input.name = name; input.value = fields[name];
+						form.appendChild(input);
+					});
+					(ids || []).forEach(function (id) {
+						var input = document.createElement('input');
+						input.type = 'hidden'; input.name = 'file_ids'; input.value = id;
+						form.appendChild(input);
+					});
+					addCsrfToken(form);
+					document.body.appendChild(form);
+					form.submit();
+				}
+				function simDeleteFile(fileId, btn) {
+					if (!appConfirm(btn, 'Delete this simulated file?')) return;
+					simPost('/characterizations/data/' + fileId + '/delete', { tab: 'simulate' });
+				}
+				function simBulkDelete(btn) {
+					var checked = Array.prototype.slice.call(document.querySelectorAll('input[name="file_ids"]:checked'));
+					if (!checked.length) return;
+					if (!appConfirm(btn, 'Delete ' + checked.length + ' simulated file(s)?')) return;
+					simPost('/characterizations/data/bulk-delete', { tab: 'simulate' }, checked.map(function (c) { return c.value; }));
+				}
+			</script>
+			{% else %}
+			<p style="color: #888; font-size: 0.9em;">Nothing simulated yet &mdash; generate something above and it will appear here.</p>
+			{% endif %}
 
 		{% elif tab == 'snapshots' %}
 		<h2 style="margin-top:0; font-size: 1.3em;">Snapshots</h2>

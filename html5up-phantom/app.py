@@ -3509,6 +3509,7 @@ def technique_workspace(slug):
             imaging_result=imaging_result,
             integration_result=integration_result,
             sim_spec=sim_spec,
+            sim_slugs=[slugify_technique(t) for t in simulate.SIM_SPECS],
             simulated_files=simulated_files,
             sim_error=session.pop('sim_error', None),
             colormap_options=COLORMAP_OPTIONS,
@@ -4964,14 +4965,15 @@ def delete_data_file(file_id):
     db.session.commit()
 
     redirect_slug = request.form.get('slug', '').strip()
+    redirect_tab = request.form.get('tab', '').strip()
     if redirect_slug and redirect_slug in TECHNIQUE_SLUGS:
         if technique_name == 'AFM':
             select_tab = 'Select data'
         else:
             select_tab = 'Select images' if file_type == 'image' else 'Select files'
-        return redirect(url_for('technique_workspace', slug=redirect_slug, tab=select_tab))
+        return redirect(url_for('technique_workspace', slug=redirect_slug, tab=redirect_tab or select_tab))
 
-    return redirect(url_for('data_interpretation_workspace'))
+    return redirect(url_for('data_interpretation_workspace', tab=redirect_tab or 'select'))
 
 
 @app.route('/characterizations/data/bulk-delete', methods=['POST'])
@@ -5000,7 +5002,7 @@ def bulk_delete_data_files():
         select_tab = redirect_tab or ('Select data' if technique_name == 'AFM' else ('Select images' if file_type == 'image' else 'Select files'))
         return redirect(url_for('technique_workspace', slug=redirect_slug, tab=select_tab))
 
-    return redirect(url_for('data_interpretation_workspace'))
+    return redirect(url_for('data_interpretation_workspace', tab=redirect_tab or 'select'))
 
 
 @app.route('/characterizations/data/overlay', methods=['GET', 'POST'])
