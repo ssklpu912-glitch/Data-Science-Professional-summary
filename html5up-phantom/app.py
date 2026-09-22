@@ -1,9 +1,10 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session, send_file, abort
 from flask_wtf import CSRFProtect
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import or_, func
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import io
 import re
@@ -372,6 +373,55 @@ class SampleProperty(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
 
 
+class LabGroup(db.Model):
+    """A named set of people (a lab, a collaboration) an owner can share items with at once.
+    Members are identified by email, not user id, so someone can be added before they've
+    registered and simply gains access once they sign up with that email."""
+    id = db.Column(db.Integer, primary_key=True)
+    owner_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    name = db.Column(db.String(150), nullable=False)
+    description = db.Column(db.String(300), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
+
+    members = db.relationship(
+        'GroupMember', backref='group', order_by='GroupMember.added_at', cascade='all, delete-orphan',
+    )
+
+
+class GroupMember(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('lab_group.id'), nullable=False)
+    email = db.Column(db.String(150), nullable=False)   # stored lowercase
+    added_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
+
+
+class Share(db.Model):
+    """One grant of access to one item. Exactly one of grantee_email / group_id / link_token
+    identifies who the grant is for: a specific email, a lab group, or anyone holding an
+    unguessable link (read-only, no account needed)."""
+    id = db.Column(db.Integer, primary_key=True)
+    owner_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    item_type = db.Column(db.String(30), nullable=False)   # experiment/characterization/paper/protocol/sample/snapshot
+    item_id = db.Column(db.Integer, nullable=False)
+    grantee_email = db.Column(db.String(150), nullable=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('lab_group.id'), nullable=True)
+    link_token = db.Column(db.String(64), unique=True, nullable=True)
+    note = db.Column(db.String(300), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
+    expires_at = db.Column(db.DateTime, nullable=True)
+
+
+class ShareComment(db.Model):
+    """A comment on a shared item, visible to the owner and everyone the item is shared with
+    by email or group (never to guest-link viewers)."""
+    id = db.Column(db.Integer, primary_key=True)
+    item_type = db.Column(db.String(30), nullable=False)
+    item_id = db.Column(db.Integer, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
+
+
 with app.app_context():
     db.create_all()
 
@@ -417,7 +467,8 @@ with app.app_context():
 # Every route requires a signed-in session except these — the pages you need
 # before you can have one, plus Flask's own static file server and the favicon
 # every browser requests automatically regardless of what page is loaded.
-PUBLIC_ENDPOINTS = {'index', 'register', 'login', 'static', 'favicon', 'forgot_password', 'reset_password'}
+PUBLIC_ENDPOINTS = {'index', 'register', 'login', 'static', 'favicon', 'forgot_password', 'reset_password',
+                    'shared_link_view'}
 
 
 PRODUCTION_MODE = os.environ.get('PRODUCTION', '0').lower() in ('1', 'true', 'yes')
@@ -577,23 +628,19 @@ def user_from_reset_token(token):
     return None
 
 
-def send_reset_email(user, link):
-    """Emails the reset link via SMTP when SMTP_HOST is configured (SMTP_PORT, SMTP_USER,
-    SMTP_PASSWORD, MAIL_FROM). Returns True if it was actually sent. With no SMTP configured
-    the link is only written to the server log — fine for local development."""
+def send_email(to_addr, subject, body):
+    """Sends a plain-text email via SMTP when SMTP_HOST is configured (SMTP_PORT, SMTP_USER,
+    SMTP_PASSWORD, MAIL_FROM). Returns True only if it was actually sent. With no SMTP
+    configured the message is written to the server log instead — fine for local development."""
     host = os.environ.get('SMTP_HOST')
     if not host:
-        app.logger.warning(f'SMTP not configured — password reset link for {user.email}: {link}')
+        app.logger.warning(f'SMTP not configured — email to {to_addr} ({subject}):\n{body}')
         return False
     msg = EmailMessage()
-    msg['Subject'] = 'Reset your LabLogbook password'
+    msg['Subject'] = subject
     msg['From'] = os.environ.get('MAIL_FROM') or os.environ.get('SMTP_USER') or 'no-reply@lablogbook.local'
-    msg['To'] = user.email
-    msg.set_content(
-        f"Hi {user.name},\n\nUse this link to choose a new LabLogbook password "
-        f"(valid for {PASSWORD_RESET_MAX_AGE // 60} minutes, one use):\n\n{link}\n\n"
-        "If you didn't ask for this, you can ignore this email — your password hasn't changed."
-    )
+    msg['To'] = to_addr
+    msg.set_content(body)
     try:
         with smtplib.SMTP(host, int(os.environ.get('SMTP_PORT', 587)), timeout=10) as smtp:
             smtp.starttls()
@@ -602,8 +649,17 @@ def send_reset_email(user, link):
             smtp.send_message(msg)
         return True
     except Exception:
-        app.logger.exception('Sending password reset email failed')
+        app.logger.exception(f'Sending email to {to_addr} failed')
         return False
+
+
+def send_reset_email(user, link):
+    return send_email(
+        user.email, 'Reset your LabLogbook password',
+        f"Hi {user.name},\n\nUse this link to choose a new LabLogbook password "
+        f"(valid for {PASSWORD_RESET_MAX_AGE // 60} minutes, one use):\n\n{link}\n\n"
+        "If you didn't ask for this, you can ignore this email — your password hasn't changed."
+    )
 
 
 @app.route('/forgot-password', methods=['GET', 'POST'])
@@ -6158,6 +6214,386 @@ def sample_drift():
         axes=axes, axis=axis, plot_filename=plot_filename,
         points=points, drift=drift, anomalies=anomalies, summary=summary, error=error,
     )
+
+
+# ---- Collaboration: share records with people, lab groups, or anyone with a link ----------
+
+SHAREABLE_TYPES = {
+    'experiment': (LogEntry, 'Experiment'),
+    'characterization': (CharEntry, 'Characterization'),
+    'paper': (MiscEntry, 'Research paper'),
+    'protocol': (Protocol, 'Protocol / SOP'),
+    'sample': (Sample, 'Sample'),
+    'snapshot': (AnalysisSnapshot, 'Analysis snapshot'),
+}
+SHARE_EXPIRY_OPTIONS = [('7', '7 days'), ('30', '30 days'), ('90', '90 days'), ('', 'Never')]
+
+
+def current_user_email():
+    email = session.get('user_email')
+    if not email:
+        user = db.session.get(User, session['user_id'])
+        email = user.email if user else ''
+    return email.strip().lower()
+
+
+def _active_shares():
+    return or_(Share.expires_at.is_(None), Share.expires_at > datetime.now())
+
+
+def user_group_ids(email):
+    return [m.group_id for m in GroupMember.query.filter_by(email=email).all()]
+
+
+def item_title(item_type, obj):
+    if item_type == 'experiment':
+        return obj.title
+    if item_type == 'characterization':
+        return f"{obj.technique_name} characterization ({obj.date_scheduled.strftime('%Y-%m-%d')})"
+    if item_type == 'paper':
+        return obj.paper_title or obj.research_topic
+    if item_type == 'protocol':
+        return obj.title
+    if item_type == 'sample':
+        return obj.name
+    return obj.title   # snapshot
+
+
+def item_payload(item_type, obj):
+    """A read-only, template-friendly description of any shareable item — one generic shape
+    (title, meta chips, text sections, steps, table, image/pdf/link) so a single view page can
+    render all of them without exposing the owner's edit controls."""
+    p = {'title': item_title(item_type, obj), 'meta': [], 'sections': [], 'steps': [],
+         'table': None, 'image': None, 'pdf': None, 'link': None}
+
+    def section(heading, text):
+        if text and str(text).strip():
+            p['sections'].append((heading, str(text)))
+
+    if item_type == 'experiment':
+        p['meta'] = [m for m in (obj.exp_type, obj.status, obj.entry_datetime.strftime('%Y-%m-%d')) if m]
+        for heading, field in (('Objective', obj.objective), ('Materials', obj.materials), ('Procedure', obj.procedure),
+                               ('Input parameters', obj.input_params), ('Output / results', obj.output_results),
+                               ('Observations', obj.observations), ('Conclusion', obj.conclusion)):
+            section(heading, field)
+    elif item_type == 'characterization':
+        p['meta'] = [m for m in (obj.date_scheduled.strftime('%Y-%m-%d'),
+                                 f"{obj.num_samples} sample(s)" if obj.num_samples else None,
+                                 obj.sample_prep, obj.outcome) if m]
+        section('Interpretation', obj.interpretation)
+    elif item_type == 'paper':
+        p['meta'] = [m for m in (obj.journal, obj.entry_date.strftime('%Y-%m-%d')) if m]
+        section('Research topic', obj.research_topic)
+        section('Key facts', obj.key_facts)
+        p['link'] = obj.paper_link
+        p['pdf'] = obj.pdf_filename
+    elif item_type == 'protocol':
+        p['meta'] = [m for m in (f"v{obj.current_version}", obj.equipment, obj.category) if m]
+        latest = obj.latest_version
+        if latest:
+            p['steps'] = [s.strip() for s in latest.steps.split('\n') if s.strip()]
+        changes = [f"v{v.version_number} ({v.created_at.strftime('%Y-%m-%d')}): {v.change_note}"
+                   for v in obj.versions if v.change_note]
+        section('Version notes', "\n".join(changes))
+    elif item_type == 'sample':
+        section('Description', obj.description)
+        if obj.properties:
+            p['table'] = {
+                'headers': ['Technique', 'Property', 'Value', 'Note'],
+                'rows': [[pr.technique_name, pr.property_name,
+                          f"{pr.value:g}" + (f" {pr.unit}" if pr.unit else ''), pr.note or ''] for pr in obj.properties],
+            }
+    else:  # snapshot
+        p['meta'] = [obj.created_at.strftime('%Y-%m-%d %H:%M'), obj.plot_type]
+        p['image'] = obj.plot_filename
+        section('Note', obj.note)
+        section('Overall interpretation', obj.overall_analysis)
+        results = json.loads(obj.results_json or '[]')
+        shaped = [r for r in results if r.get('shape')]
+        section('Shape suggestions', "\n".join(
+            f"{r['label']} looks like {r['shape']['friendly']} (R² ≈ {r['shape']['r_squared']:.3f})" for r in shaped))
+        if results:
+            p['table'] = {
+                'headers': ['File', 'n', 'Mean', 'Std', 'Min', 'Max'],
+                'rows': [[r['label'], r['stats']['count'], r['stats']['mean'], r['stats']['std'],
+                          r['stats']['min'], r['stats']['max']] for r in results],
+            }
+    return p
+
+
+def viewer_access(item_type, item_id, owner_id):
+    """'owner', 'shared' (granted by email or group, not expired), or None."""
+    uid = session['user_id']
+    if owner_id == uid:
+        return 'owner'
+    email = current_user_email()
+    grants = [Share.grantee_email == email]
+    gids = user_group_ids(email)
+    if gids:
+        grants.append(Share.group_id.in_(gids))
+    hit = Share.query.filter(
+        Share.item_type == item_type, Share.item_id == item_id, Share.owner_id == owner_id,
+        or_(*grants), _active_shares(),
+    ).first()
+    return 'shared' if hit else None
+
+
+def _load_item_or_404(item_type, item_id):
+    if item_type not in SHAREABLE_TYPES:
+        abort(404)
+    obj = SHAREABLE_TYPES[item_type][0].query.get_or_404(item_id)
+    return obj
+
+
+def _describe_target(share):
+    if share.link_token:
+        return 'Anyone with the link'
+    if share.group_id:
+        group = db.session.get(LabGroup, share.group_id)
+        return f"Group: {group.name}" if group else 'Group (deleted)'
+    return share.grantee_email
+
+
+@app.route('/collaborate')
+def collaborate():
+    uid = session['user_id']
+    email = current_user_email()
+    gids = user_group_ids(email)
+
+    grants = [Share.grantee_email == email]
+    if gids:
+        grants.append(Share.group_id.in_(gids))
+    incoming = []
+    for s in Share.query.filter(Share.owner_id != uid, or_(*grants), _active_shares()).order_by(Share.created_at.desc()).all():
+        obj = SHAREABLE_TYPES[s.item_type][0].query.get(s.item_id)
+        owner = db.session.get(User, s.owner_id)
+        if obj:
+            incoming.append({'share': s, 'title': item_title(s.item_type, obj), 'kind': SHAREABLE_TYPES[s.item_type][1],
+                             'owner': owner.name if owner else 'Someone'})
+
+    outgoing = []
+    for s in Share.query.filter_by(owner_id=uid).order_by(Share.created_at.desc()).all():
+        obj = SHAREABLE_TYPES[s.item_type][0].query.get(s.item_id)
+        outgoing.append({
+            'share': s, 'title': item_title(s.item_type, obj) if obj else '(deleted item)',
+            'kind': SHAREABLE_TYPES[s.item_type][1], 'target': _describe_target(s),
+            'link': url_for('shared_link_view', token=s.link_token, _external=True) if s.link_token else None,
+            'expired': bool(s.expires_at and s.expires_at <= datetime.now()),
+        })
+
+    my_groups = LabGroup.query.filter_by(owner_id=uid).order_by(LabGroup.created_at.desc()).all()
+    member_groups = LabGroup.query.filter(LabGroup.id.in_(gids), LabGroup.owner_id != uid).all() if gids else []
+
+    items = {}
+    for item_type, (model, _) in SHAREABLE_TYPES.items():
+        rows = model.query.filter_by(user_id=uid).all()
+        items[item_type] = [{'id': o.id, 'title': item_title(item_type, o)} for o in rows]
+
+    return render_template(
+        'collaborate.html', incoming=incoming, outgoing=outgoing, my_groups=my_groups, member_groups=member_groups,
+        share_targets=[{'id': g.id, 'name': g.name} for g in my_groups + member_groups],
+        items=items, type_labels={k: v[1] for k, v in SHAREABLE_TYPES.items()}, expiry_options=SHARE_EXPIRY_OPTIONS,
+        preselect_type=request.args.get('type', ''), preselect_id=request.args.get('id', type=int),
+        message=session.pop('collab_msg', None), error=session.pop('collab_error', None),
+    )
+
+
+@app.route('/collaborate/share', methods=['POST'])
+def create_share():
+    uid = session['user_id']
+    item_type = request.form.get('item_type', '')
+    item_id = request.form.get('item_id', type=int)
+    obj = _load_item_or_404(item_type, item_id)
+    if obj.user_id != uid:
+        abort(404)
+
+    kind = request.form.get('kind', 'email')
+    days = request.form.get('expiry_days', '')
+    share = Share(
+        owner_id=uid, item_type=item_type, item_id=item_id,
+        note=(request.form.get('note', '').strip()[:300] or None),
+        expires_at=(datetime.now() + timedelta(days=int(days))) if days.isdigit() else None,
+    )
+
+    if kind == 'link':
+        share.link_token = secrets.token_urlsafe(24)
+        session['collab_msg'] = 'Link created — copy it from "Shared by me" below and send it to anyone.'
+    elif kind == 'group':
+        group_id = request.form.get('group_id', type=int)
+        group = db.session.get(LabGroup, group_id) if group_id else None
+        if not group or (group.owner_id != uid and group.id not in user_group_ids(current_user_email())):
+            session['collab_error'] = 'Pick one of your groups.'
+            return redirect(url_for('collaborate'))
+        share.group_id = group.id
+        session['collab_msg'] = f'Shared with the group "{group.name}".'
+    else:
+        target = request.form.get('email', '').strip().lower()
+        if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', target):
+            session['collab_error'] = "That doesn't look like an email address."
+            return redirect(url_for('collaborate'))
+        if target == current_user_email():
+            session['collab_error'] = "That's your own email."
+            return redirect(url_for('collaborate'))
+        duplicate = Share.query.filter_by(owner_id=uid, item_type=item_type, item_id=item_id, grantee_email=target).first()
+        if duplicate:
+            duplicate.expires_at, duplicate.note = share.expires_at, share.note
+            db.session.commit()
+            session['collab_msg'] = f'Already shared with {target} — updated the expiry and note.'
+            return redirect(url_for('collaborate'))
+        share.grantee_email = target
+        owner = db.session.get(User, uid)
+        registered = User.query.filter(func.lower(User.email) == target).first() is not None
+        access_hint = (f"Sign in and open Collaborate to see it: {url_for('collaborate', _external=True)}" if registered else
+                       f"Create an account with this email address to see it: {url_for('register', _external=True)}")
+        sent = send_email(
+            target, f"{owner.name} shared \"{item_title(item_type, obj)}\" with you on LabLogbook",
+            f"{owner.name} shared a {SHAREABLE_TYPES[item_type][1].lower()} with you.\n\n"
+            + (f"Their note: {share.note}\n\n" if share.note else '') + access_hint + "\n",
+        )
+        session['collab_msg'] = (f'Shared with {target}.' + (' They were emailed.' if sent else '')
+                                 + ('' if registered else ' They have no account yet — they will see it after registering with that email, or you can make a guest link instead.'))
+
+    db.session.add(share)
+    db.session.commit()
+    return redirect(url_for('collaborate'))
+
+
+@app.route('/collaborate/share/<int:share_id>/revoke', methods=['POST'])
+def revoke_share(share_id):
+    share = get_owned_or_404(Share, share_id, owner_field='owner_id')
+    db.session.delete(share)
+    db.session.commit()
+    session['collab_msg'] = 'Access removed.'
+    return redirect(url_for('collaborate'))
+
+
+@app.route('/collaborate/item/<item_type>/<int:item_id>')
+def collab_item_view(item_type, item_id):
+    obj = _load_item_or_404(item_type, item_id)
+    access = viewer_access(item_type, item_id, obj.user_id)
+    if not access:
+        abort(404)
+    owner = db.session.get(User, obj.user_id)
+    comments = ShareComment.query.filter_by(item_type=item_type, item_id=item_id).order_by(ShareComment.created_at).all()
+    authors = {u.id: u.name for u in User.query.filter(User.id.in_({c.user_id for c in comments})).all()} if comments else {}
+    return render_template(
+        'shared_view.html', payload=item_payload(item_type, obj), item_type=item_type, item_id=item_id,
+        kind_label=SHAREABLE_TYPES[item_type][1], owner_name=owner.name if owner else 'Someone',
+        is_owner=(access == 'owner'), guest=False, comments=comments, authors=authors,
+    )
+
+
+@app.route('/collaborate/item/<item_type>/<int:item_id>/comment', methods=['POST'])
+def add_share_comment(item_type, item_id):
+    obj = _load_item_or_404(item_type, item_id)
+    if not viewer_access(item_type, item_id, obj.user_id):
+        abort(404)
+    body = request.form.get('body', '').strip()
+    if body:
+        db.session.add(ShareComment(item_type=item_type, item_id=item_id, user_id=session['user_id'], body=body[:2000]))
+        db.session.commit()
+    return redirect(url_for('collab_item_view', item_type=item_type, item_id=item_id) + '#comments')
+
+
+@app.route('/collaborate/comment/<int:comment_id>/delete', methods=['POST'])
+def delete_share_comment(comment_id):
+    comment = ShareComment.query.get_or_404(comment_id)
+    obj = _load_item_or_404(comment.item_type, comment.item_id)
+    if session['user_id'] not in (comment.user_id, obj.user_id):
+        abort(404)
+    db.session.delete(comment)
+    db.session.commit()
+    return redirect(url_for('collab_item_view', item_type=comment.item_type, item_id=comment.item_id) + '#comments')
+
+
+@app.route('/collaborate/item/protocol/<int:item_id>/copy', methods=['POST'])
+def copy_shared_protocol(item_id):
+    source = _load_item_or_404('protocol', item_id)
+    if not viewer_access('protocol', item_id, source.user_id):
+        abort(404)
+    latest = source.latest_version
+    clone = Protocol(
+        user_id=session['user_id'], title=source.title, equipment=source.equipment,
+        category=source.category, current_version=1, cloned_from_id=source.id,
+    )
+    db.session.add(clone)
+    db.session.flush()
+    db.session.add(ProtocolVersion(
+        protocol_id=clone.id, version_number=1, steps=(latest.steps if latest else ''),
+        change_note=f'Copied from a shared protocol (v{latest.version_number if latest else 1})',
+    ))
+    db.session.commit()
+    return redirect(url_for('elements', tab='protocols'))
+
+
+@app.route('/shared/<token>')
+def shared_link_view(token):
+    """Guest access: read-only, no account, no comments — just whoever holds the unguessable link."""
+    share = Share.query.filter_by(link_token=token).first_or_404()
+    if share.expires_at and share.expires_at <= datetime.now():
+        return render_template('error.html', title='Link expired', message='This shared link has expired. Ask the person who sent it for a new one.'), 410
+    obj = SHAREABLE_TYPES[share.item_type][0].query.get(share.item_id)
+    if not obj:
+        abort(404)
+    owner = db.session.get(User, share.owner_id)
+    response = app.make_response(render_template(
+        'shared_view.html', payload=item_payload(share.item_type, obj), item_type=share.item_type, item_id=share.item_id,
+        kind_label=SHAREABLE_TYPES[share.item_type][1], owner_name=owner.name if owner else 'Someone',
+        is_owner=False, guest=True, comments=[], authors={},
+    ))
+    response.headers['X-Robots-Tag'] = 'noindex, nofollow'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    return response
+
+
+@app.route('/collaborate/groups/new', methods=['POST'])
+def create_group():
+    name = request.form.get('name', '').strip()
+    if not name:
+        session['collab_error'] = 'A group needs a name.'
+    else:
+        db.session.add(LabGroup(owner_id=session['user_id'], name=name[:150],
+                                description=(request.form.get('description', '').strip()[:300] or None)))
+        db.session.commit()
+        session['collab_msg'] = f'Group "{name}" created — add members below.'
+    return redirect(url_for('collaborate'))
+
+
+@app.route('/collaborate/groups/<int:group_id>/members/add', methods=['POST'])
+def add_group_member(group_id):
+    group = get_owned_or_404(LabGroup, group_id, owner_field='owner_id')
+    emails = [e.strip().lower() for e in re.split(r'[,\s;]+', request.form.get('emails', '')) if e.strip()]
+    added = 0
+    for e in emails:
+        if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', e) or e == current_user_email():
+            continue
+        if not GroupMember.query.filter_by(group_id=group.id, email=e).first():
+            db.session.add(GroupMember(group_id=group.id, email=e))
+            added += 1
+    db.session.commit()
+    session['collab_msg'] = f'Added {added} member(s) to "{group.name}".' if added else 'No new valid emails to add.'
+    return redirect(url_for('collaborate'))
+
+
+@app.route('/collaborate/groups/<int:group_id>/members/<int:member_id>/remove', methods=['POST'])
+def remove_group_member(group_id, member_id):
+    group = get_owned_or_404(LabGroup, group_id, owner_field='owner_id')
+    member = GroupMember.query.get_or_404(member_id)
+    if member.group_id != group.id:
+        abort(404)
+    db.session.delete(member)
+    db.session.commit()
+    return redirect(url_for('collaborate'))
+
+
+@app.route('/collaborate/groups/<int:group_id>/delete', methods=['POST'])
+def delete_group(group_id):
+    group = get_owned_or_404(LabGroup, group_id, owner_field='owner_id')
+    Share.query.filter_by(group_id=group.id).delete()
+    db.session.delete(group)
+    db.session.commit()
+    session['collab_msg'] = 'Group deleted, along with anything shared through it.'
+    return redirect(url_for('collaborate'))
 
 
 if __name__ == '__main__':

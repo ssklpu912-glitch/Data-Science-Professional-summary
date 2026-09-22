@@ -72,6 +72,7 @@
 		<form method="POST" action="{{ url_for('dp_restore_snapshot', snapshot_id=snapshot.id) }}">
 			<button type="submit" class="button primary">&#8635; Restore this configuration</button>
 		</form>
+		<a href="{{ url_for('collaborate', type='snapshot', id=snapshot.id) }}" class="button">Share</a>
 		<form method="POST" action="{{ url_for('dp_delete_snapshot', snapshot_id=snapshot.id) }}" onsubmit="return appConfirm(this.querySelector('[type=submit]'), 'Delete this snapshot? This cannot be undone.');">
 			<button type="submit" class="el-text-btn el-delete">Delete</button>
 		</form>

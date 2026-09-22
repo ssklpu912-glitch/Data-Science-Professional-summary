@@ -65,6 +65,7 @@
 						<span class="el-badge">v{{ p.current_version }}</span>
 						{% if p.equipment %}<span class="el-chip el-chip-equipment">{{ p.equipment }}</span>{% endif %}
 						{% if p.category %}<span class="el-chip">{{ p.category }}</span>{% endif %}
+							<a href="{{ url_for('collaborate', type='protocol', id=p.id) }}" class="el-text-btn" style="margin-left: 0.6em;">Share</a>
 					</div>
 					<form method="POST" action="{{ url_for('delete_protocol', protocol_id=p.id) }}" onsubmit="return appConfirm(this.querySelector('[type=submit]'), 'Delete this protocol and all its versions?');">
 						<button type="submit" class="el-text-btn el-delete">Delete</button>
