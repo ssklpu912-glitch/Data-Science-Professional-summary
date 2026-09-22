@@ -73,7 +73,7 @@
 					{% for f in all_files %}
 					<label style="display: flex; align-items: center; gap: 0.6em; padding: 0.4em 0; border-bottom: 1px solid #eee; cursor: pointer; font-size: 0.9em;">
 						<input type="checkbox" name="file_ids" value="{{ f.id }}" {% if f.id in state.file_ids %}checked{% endif %} />
-						<span style="flex: 1;"><strong>{{ f.label or f.original_filename }}</strong><br><span style="color:#888; font-size:0.85em;">{{ f.uploaded_at.strftime('%Y-%m-%d') }}</span></span>
+						<span style="flex: 1;"><strong>{{ f.label or f.original_filename }}</strong>{% if f.is_simulated %} <span style="background: #fff8e6; color: #8a6210; font-size: 0.72em; font-weight: 700; padding: 0.15em 0.6em; border-radius: 999px; margin-left: 0.3em;">Simulated</span>{% endif %}<br><span style="color:#888; font-size:0.85em;">{{ f.uploaded_at.strftime('%Y-%m-%d') }}</span></span>
 						<button type="button" onclick="event.preventDefault(); deleteSpecFile({{ f.id }}, this);" title="Delete this file"
 								style="background: none; border: none; color: #b3261e; cursor: pointer; font-size: 1em; padding: 0.2em 0.5em;">✕</button>
 					</label>
@@ -122,6 +122,82 @@
 			</script>
 			{% else %}
 				<p style="color: #888; font-size: 0.9em;">No files imported yet.</p>
+			{% endif %}
+
+		{% elif active_tab == 'Simulate' %}
+			<p style="font-size: 0.85em; color: #555; margin-bottom: 1em;">Generate synthetic data for this technique to try the tools without a real file. Pick your parameters, and the result is saved to your file list (badged <strong>Simulated</strong>), selected, and opened on the next relevant tab. Each run keeps an answer key so you can check what the analysis should recover.</p>
+			{% if sim_error %}
+			<div style="background: #fdecea; color: #b3261e; padding: 0.7em 1em; border-radius: 8px; margin-bottom: 1em; font-size: 0.85em;">{{ sim_error }}</div>
+			{% endif %}
+			<form method="POST" action="{{ url_for('tech_simulate', slug=slug) }}" id="sim-form" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+				{% if sim_spec.modes|length > 1 %}
+				<div class="field">
+					<label for="sim-mode">What to simulate</label>
+					<select id="sim-mode" name="mode">
+						{% for mode in sim_spec.modes %}<option value="{{ mode.key }}">{{ mode.label }}</option>{% endfor %}
+					</select>
+				</div>
+				{% endif %}
+
+				{% for mode in sim_spec.modes %}
+				<fieldset class="sim-fs" data-mode="{{ mode.key }}" style="border: 0; padding: 0; margin: 0;">
+					{% for f in mode.fields %}
+					<div class="field">
+						<label for="sim-{{ mode.key }}-{{ f.name }}">{{ f.label }}</label>
+						{% if f.kind == 'textarea' %}
+						<textarea id="sim-{{ mode.key }}-{{ f.name }}" name="{{ f.name }}" rows="{{ 5 if f.name in ('peaks', 'compounds', 'hotspots') else 3 }}" style="font-family: monospace; font-size: 0.85em;">{{ f.default }}</textarea>
+						{% elif f.kind == 'select' %}
+						<select id="sim-{{ mode.key }}-{{ f.name }}" name="{{ f.name }}">
+							{% for value, label in f.options %}<option value="{{ value }}" {{ 'selected' if value == f.default else '' }}>{{ label }}</option>{% endfor %}
+						</select>
+						{% elif f.kind == 'number' %}
+						<input type="number" id="sim-{{ mode.key }}-{{ f.name }}" name="{{ f.name }}" value="{{ f.default }}" step="{{ f.step or 'any' }}" />
+						{% else %}
+						<input type="text" id="sim-{{ mode.key }}-{{ f.name }}" name="{{ f.name }}" value="{{ f.default }}" />
+						{% endif %}
+						{% if f.help %}<p style="font-size: 0.78em; color: #888; margin: 0.3em 0 0 0;">{{ f.help }}</p>{% endif %}
+					</div>
+					{% endfor %}
+				</fieldset>
+				{% endfor %}
+
+				<div class="field">
+					<label for="sim-noise">Noise (% of tallest signal)</label>
+					<input type="number" id="sim-noise" name="noise_pct" value="1.5" step="0.1" min="0" max="50" />
+				</div>
+				<div class="field">
+					<label for="sim-seed">Random seed (optional — same seed gives identical data)</label>
+					<input type="text" id="sim-seed" name="seed" placeholder="e.g. 42" />
+				</div>
+				<ul class="actions"><li><input type="submit" value="Generate &amp; open" class="primary" /></li></ul>
+			</form>
+			<script>
+				(function () {
+					var sel = document.getElementById('sim-mode');
+					var sets = document.querySelectorAll('#sim-form .sim-fs');
+					function apply() {
+						var mode = sel ? sel.value : sets[0].getAttribute('data-mode');
+						sets.forEach(function (fs) { fs.disabled = fs.getAttribute('data-mode') !== mode; fs.style.display = fs.disabled ? 'none' : ''; });
+					}
+					if (sel) sel.addEventListener('change', apply);
+					apply();
+				})();
+			</script>
+
+			{% if simulated_files %}
+			<h3 style="margin: 1.4em 0 0.6em 0; font-size: 1em;">Your simulated files</h3>
+			{% for item in simulated_files %}
+			<div style="background: #fff; border: 1px solid #ececec; border-radius: 8px; padding: 0.8em 1em; margin-bottom: 0.7em;">
+				<strong style="font-size: 0.88em;">{{ item.file.label }}</strong>
+				<span style="background: #fff8e6; color: #8a6210; font-size: 0.72em; font-weight: 700; padding: 0.15em 0.6em; border-radius: 999px; margin-left: 0.3em;">Simulated</span>
+				<details style="margin-top: 0.4em;">
+					<summary style="cursor: pointer; color: #888; font-size: 0.82em;">Reveal answer key</summary>
+					<ul style="margin: 0.5em 0 0 0; padding-left: 1.2em; font-size: 0.82em; color: #444;">
+						{% for line in item.key %}<li>{{ line }}</li>{% endfor %}
+					</ul>
+				</details>
+			</div>
+			{% endfor %}
 			{% endif %}
 
 		{% elif active_tab == plot_tab_name %}

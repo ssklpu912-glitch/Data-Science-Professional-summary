@@ -55,6 +55,9 @@
 		<tr><td class="{{ 'active' if tab == 'analysis' else '' }}">
 			<a href="{{ url_for('data_interpretation_workspace', tab='analysis') }}">📊 Analysis</a>
 		</td></tr>
+		<tr><td class="{{ 'active' if tab == 'simulate' else '' }}">
+			<a href="{{ url_for('data_interpretation_workspace', tab='simulate') }}">🧪 Simulate</a>
+		</td></tr>
 		<tr><td class="{{ 'active' if tab == 'snapshots' else '' }}">
 			<a href="{{ url_for('data_interpretation_workspace', tab='snapshots') }}">📸 Snapshots</a>
 		</td></tr>
@@ -95,7 +98,7 @@
 						  style="display: inline-block; width: 16px; height: 16px; min-width: 16px; border: 2px solid {% if f.id in state.file_ids %}#333{% else %}#999{% endif %}; border-radius: 4px; background: {% if f.id in state.file_ids %}#333{% else %}#fff{% endif %}; position: relative;">
 						{% if f.id in state.file_ids %}<span style="position:absolute; left:2px; top:-2px; color:#fff; font-size:12px; line-height:1;">✓</span>{% endif %}
 					</span>
-					<span style="flex: 1;"><strong>{{ f.label or f.original_filename }}</strong> <span style="color:#888; font-size:0.85em;">{{ f.uploaded_at.strftime('%Y-%m-%d') }}</span></span>
+					<span style="flex: 1;"><strong>{{ f.label or f.original_filename }}</strong>{% if f.is_simulated %} <span style="background: #fff8e6; color: #8a6210; font-size: 0.72em; font-weight: 700; padding: 0.15em 0.6em; border-radius: 999px;">Simulated</span>{% endif %} <span style="color:#888; font-size:0.85em;">{{ f.uploaded_at.strftime('%Y-%m-%d') }}</span></span>
 					<button type="button" onclick="event.stopPropagation(); deleteDpFile({{ f.id }}, this);" title="Remove this file"
 							style="background: none; border: none; color: #b3261e; cursor: pointer; font-size: 1em; padding: 0.2em 0.5em;">✕</button>
 					<input type="checkbox" name="file_ids" value="{{ f.id }}" id="dp-cb-{{ f.id }}"
@@ -367,6 +370,60 @@
 					</table>
 				</div>
 			</details>
+		{% endif %}
+
+		{% elif tab == 'simulate' %}
+		<h2 style="margin-top:0; font-size: 1.3em;">Simulate</h2>
+		<p style="color: #888; font-size: 0.85em; margin-top: -0.6em;">Generate a noisy curve of a known shape — handy for trying Plot, Derivative and the Analysis tab's Shape suggestions against a known answer. The result is saved to your files (badged <strong>Simulated</strong>), selected, and opened on Analysis.</p>
+		{% if sim_error %}<div style="background: #fdecea; color: #b3261e; padding: 0.7em 1em; border-radius: 8px; margin-bottom: 1em; font-size: 0.85em;">{{ sim_error }}</div>{% endif %}
+		<form method="POST" action="{{ url_for('dp_simulate') }}" id="curve-sim-form" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+			<div class="field">
+				<label for="cs-shape">Curve shape</label>
+				<select id="cs-shape" name="shape">
+					{% for key, spec in curve_specs.items() %}<option value="{{ key }}" {{ 'selected' if key == 'langmuir' else '' }}>{{ spec.label }}</option>{% endfor %}
+				</select>
+			</div>
+			<div id="cs-params"></div>
+			<div class="field"><label for="cs-x0">X start</label><input type="number" id="cs-x0" name="x_start" step="any" /></div>
+			<div class="field"><label for="cs-x1">X end</label><input type="number" id="cs-x1" name="x_end" step="any" /></div>
+			<div class="field"><label for="cs-n">Data points</label><input type="number" id="cs-n" name="points" value="40" min="8" max="5000" /></div>
+			<div class="field"><label for="cs-noise">Noise (% of the curve's largest value)</label><input type="number" id="cs-noise" name="noise_pct" value="2" step="0.1" min="0" max="50" /></div>
+			<div class="field"><label for="cs-seed">Random seed (optional)</label><input type="text" id="cs-seed" name="seed" placeholder="e.g. 42" /></div>
+			<ul class="actions"><li><input type="submit" value="Generate &amp; open" class="primary" /></li></ul>
+		</form>
+		<script>
+			(function () {
+				var specs = {{ curve_specs|tojson }};
+				var sel = document.getElementById('cs-shape'), box = document.getElementById('cs-params');
+				function render() {
+					var spec = specs[sel.value];
+					box.innerHTML = '';
+					spec.params.forEach(function (p, i) {
+						var wrap = document.createElement('div'); wrap.className = 'field';
+						var label = document.createElement('label'); label.textContent = 'Parameter ' + p[0];
+						var input = document.createElement('input');
+						input.type = 'number'; input.step = 'any'; input.name = 'p' + i; input.value = p[1];
+						wrap.appendChild(label); wrap.appendChild(input); box.appendChild(wrap);
+					});
+					document.getElementById('cs-x0').value = spec.x[0];
+					document.getElementById('cs-x1').value = spec.x[1];
+				}
+				sel.addEventListener('change', render);
+				render();
+			})();
+		</script>
+		{% if simulated_files %}
+		<h3 style="margin: 1.2em 0 0.6em 0; font-size: 1em;">Your simulated curves</h3>
+		{% for item in simulated_files %}
+		<div style="background: #fff; border: 1px solid #ececec; border-radius: 8px; padding: 0.8em 1em; margin-bottom: 0.7em;">
+			<strong style="font-size: 0.88em;">{{ item.file.label }}</strong>
+			<span style="background: #fff8e6; color: #8a6210; font-size: 0.72em; font-weight: 700; padding: 0.15em 0.6em; border-radius: 999px; margin-left: 0.3em;">Simulated</span>
+			<details style="margin-top: 0.4em;">
+				<summary style="cursor: pointer; color: #888; font-size: 0.82em;">Reveal answer key</summary>
+				<ul style="margin: 0.5em 0 0 0; padding-left: 1.2em; font-size: 0.82em; color: #444;">{% for line in item.key %}<li>{{ line }}</li>{% endfor %}</ul>
+			</details>
+		</div>
+		{% endfor %}
 		{% endif %}
 
 		{% elif tab == 'snapshots' %}
