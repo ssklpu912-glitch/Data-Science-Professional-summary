@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Overlay Files — LabLogbook{% endblock %}
+{% block content %}
+<header>
+	<h1>Overlay Multiple Files</h1>
+	<p>Pick 2 or more data files to plot together on the same graph, for comparison.</p>
+	<p><a href="{{ url_for('data_interpretation') }}">← Back to Data Interpretation</a></p>
+</header>
+
+{% if error %}
+<div style="max-width: 700px; margin: 0 auto 1.5em auto; background: #fdecea; color: #b3261e; padding: 0.8em 1.2em; border-radius: 8px;">
+	{{ error }}
+</div>
+{% endif %}
+
+{% if files %}
+<div style="max-width: 700px; margin: 0 auto; background: #f7f7f7; border-radius: 10px; padding: 2em;">
+	<form method="POST" id="overlay-select-form">
+		<div style="max-height: 400px; overflow-y: auto; margin-bottom: 1.5em;">
+			{% for f in files %}
+			<div class="overlay-file-row" data-file-id="{{ f.id }}"
+				 onclick="toggleOverlayFile({{ f.id }})"
+				 style="display: flex; align-items: center; gap: 0.7em; padding: 0.6em 0.4em; border-bottom: 1px solid #e5e5e5; cursor: pointer; user-select: none; border-radius: 6px;">
+				<span id="box-{{ f.id }}"
+					  style="display: inline-block; width: 18px; height: 18px; min-width: 18px; border: 2px solid #999; border-radius: 4px; background: #fff; position: relative;"></span>
+				<span>
+					<strong>{{ f.label or f.original_filename }}</strong>
+					<span style="color: #888; font-size: 0.85em; margin-left: 0.5em;">{{ f.uploaded_at.strftime('%Y-%m-%d') }}</span>
+				</span>
+				<input type="checkbox" name="file_ids" value="{{ f.id }}" id="cb-{{ f.id }}" style="display: none;" />
+			</div>
+			{% endfor %}
+		</div>
+		<ul class="actions">
+			<li><input type="submit" value="Next: choose columns" class="primary" /></li>
+		</ul>
+	</form>
+</div>
+
+<script>
+	function toggleOverlayFile(fileId) {
+		var cb = document.getElementById('cb-' + fileId);
+		var box = document.getElementById('box-' + fileId);
+		var row = document.querySelector('.overlay-file-row[data-file-id="' + fileId + '"]');
+		cb.checked = !cb.checked;
+
+		if (cb.checked) {
+			box.style.background = '#333';
+			box.style.borderColor = '#333';
+			box.innerHTML = '<span style="position:absolute; left:3px; top:-1px; color:#fff; font-size:13px; line-height:1;">✓</span>';
+			row.style.background = '#eaeaea';
+		} else {
+			box.style.background = '#fff';
+			box.style.borderColor = '#999';
+			box.innerHTML = '';
+			row.style.background = 'transparent';
+		}
+	}
+</script>
+{% else %}
+	<p style="text-align: center;">No data files uploaded yet — upload some CSV/TXT/Excel files first.</p>
+{% endif %}
+{% endblock %}

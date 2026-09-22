@@ -2395,23 +2395,23 @@ TECHNIQUE_CATEGORIES = [
 DEFAULT_TECHNIQUE_TABS = ["Select files", "Plot", "Format", "Analysis"]
 
 TECHNIQUE_TABS = {
-    "FTIR": ["Select files", "Simulate", "Plot Spectrum", "Peak Picking", "Baseline Correction", "Format", "Analysis"],
-    "UV-Vis": ["Select files", "Simulate", "Plot Spectrum", "Peak Picking", "Format", "Analysis"],
-    "Fluorescence": ["Select files", "Simulate", "Plot Spectrum", "Peak Picking", "Format", "Analysis"],
-    "Raman": ["Select files", "Simulate", "Plot Spectrum", "Peak Picking", "Baseline Correction", "Format", "Analysis"],
-    "NMR (1H, 13C)": ["Select files", "Simulate", "Plot Spectrum", "Peak Picking", "Integration", "Format", "Analysis"],
-    "CD (Circular Dichroism)": ["Select files", "Simulate", "Plot Spectrum", "Format", "Analysis"],
+    "FTIR": ["Select files", "Simulate", "Compare", "Plot Spectrum", "Peak Picking", "Baseline Correction", "Format", "Analysis"],
+    "UV-Vis": ["Select files", "Simulate", "Compare", "Plot Spectrum", "Peak Picking", "Format", "Analysis"],
+    "Fluorescence": ["Select files", "Simulate", "Compare", "Plot Spectrum", "Peak Picking", "Format", "Analysis"],
+    "Raman": ["Select files", "Simulate", "Compare", "Plot Spectrum", "Peak Picking", "Baseline Correction", "Format", "Analysis"],
+    "NMR (1H, 13C)": ["Select files", "Simulate", "Compare", "Plot Spectrum", "Peak Picking", "Integration", "Format", "Analysis"],
+    "CD (Circular Dichroism)": ["Select files", "Simulate", "Compare", "Plot Spectrum", "Format", "Analysis"],
 
-    "MALDI": ["Select files", "Simulate", "Plot Spectrum", "Peak Picking", "PMF", "Imaging", "Format", "Analysis"],
-    "LC-MS": ["Select files", "Simulate", "Chromatogram", "Formula ID", "Quantification", "Analysis"],
-    "HPLC / GC": ["Select files", "Simulate", "Plot Chromatogram", "Peak Picking", "Peak Integration", "Quantification", "Format", "Analysis"],
+    "MALDI": ["Select files", "Simulate", "Compare", "Plot Spectrum", "Peak Picking", "PMF", "Imaging", "Format", "Analysis"],
+    "LC-MS": ["Select files", "Simulate", "Compare", "Chromatogram", "Formula ID", "Quantification", "Analysis"],
+    "HPLC / GC": ["Select files", "Simulate", "Compare", "Plot Chromatogram", "Peak Picking", "Peak Integration", "Quantification", "Format", "Analysis"],
     "GPC / SEC": ["Select files", "Plot Chromatogram", "Molecular Weight", "Format", "Analysis"],
 
     "SEM": ["Select images", "Measure Particles", "Porosity", "Roughness", "Analysis"],
     "AFM": ["Select data", "Topography", "Mechanical", "Electrical", "Magnetic", "Chemical / Frictional", "Biological", "Analysis"],
     "TEM": ["Select images", "Measure Particles", "Layer Thickness", "Defects", "SAED", "Lattice Fringes", "Strain Mapping", "Analysis"],
     "Confocal / Fluorescence": ["Select images", "Measure Particles", "Analysis"],
-    "EDS/EDX": ["Select files", "Simulate", "Plot Spectrum", "Peak Picking", "Format", "Analysis"],
+    "EDS/EDX": ["Select files", "Simulate", "Compare", "Plot Spectrum", "Peak Picking", "Format", "Analysis"],
     "EBSD": ["Select images", "Measure Particles", "Analysis"],
 
     "XPS": ["Select files", "Plot Spectrum", "Peak Fitting", "Format", "Analysis"],
@@ -3458,6 +3458,12 @@ def technique_workspace(slug):
                 plot_paths.append({'file_label': img['file_label'], 'plot_filename': img_filename, 'n_pixels': len(img['x'])})
             imaging_result = {'images': plot_paths, 'errors': imaging_errors}
 
+        compare_ctx = None
+        if active_tab == 'Compare' and technique_name in simulate.SIM_SPECS:
+            compare_ctx = build_compare_context(all_files, state.get('compare'))
+            if compare_ctx['result']:
+                plot_filename = compare_ctx['result']['plot_filename']
+
         sim_spec = None
         simulated_files = []
         if active_tab == 'Simulate' and technique_name in simulate.SIM_SPECS:
@@ -3508,6 +3514,7 @@ def technique_workspace(slug):
             pmf_result=pmf_result,
             imaging_result=imaging_result,
             integration_result=integration_result,
+            compare_ctx=compare_ctx,
             sim_spec=sim_spec,
             sim_slugs=[slugify_technique(t) for t in simulate.SIM_SPECS],
             simulated_files=simulated_files,
@@ -3857,6 +3864,138 @@ def tech_simulate(slug):
     return redirect(url_for('technique_workspace', slug=slug, tab=result.get('next_tab') or spectrum_plot_tab_name(technique_name)))
 
 
+def is_xy_curve_file(data_file):
+    """False for simulated files that are tables rather than X/Y curves (m/z feature lists, ion
+    images), which can't be drawn on the same axes as a real spectrum."""
+    label = (data_file.label or '').lower()
+    return not (data_file.is_simulated and ('feature table' in label or 'ion image' in label))
+
+
+def compare_real_vs_simulated(real_id, sim_ids, normalize=True, show_residual=True):
+    """Overlays one real file with one or more simulated ones on shared axes, with an optional
+    residual panel (real minus simulated, on the real file's x grid) and per-pair numbers:
+    RMSE and correlation over the overlapping x range, plus how far each real peak sits from
+    the nearest simulated peak. Normalising scales every curve to its own maximum, since a
+    simulation rarely shares the real instrument's units."""
+    real_series, real_err = dp_build_series({'file_ids': [real_id]})
+    sim_series, sim_err = dp_build_series({'file_ids': list(sim_ids)})
+    errors = list(real_err) + list(sim_err)
+    if not real_series or not sim_series:
+        return {'plot_filename': None, 'rows': [], 'errors': errors or ['Nothing to compare.'], 'normalized': normalize}
+
+    def scale(y):
+        return y / (np.max(np.abs(y)) or 1.0) if normalize else y
+
+    def peak_positions(x, y):
+        idx, _ = find_peaks(y, prominence=0.05 * (np.ptp(y) or 1.0))
+        return x[idx]
+
+    real = real_series[0]
+    rx, ry = real['x'], scale(real['y'])
+    if show_residual:
+        fig, (ax, ax_res) = plt.subplots(2, 1, figsize=(8, 6.5), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+    else:
+        fig, ax = plt.subplots(figsize=(8, 5.5))
+        ax_res = None
+    ax.plot(rx, ry, color='#1f4e79', linewidth=1.7, label=f"Real: {real['label']}")
+
+    palette = ['#e67e22', '#c0392b', '#8e44ad', '#16a085', '#7f8c8d']
+    real_peaks = peak_positions(rx, ry)
+    rows = []
+    for i, s in enumerate(sim_series):
+        sx, sy = s['x'], scale(s['y'])
+        color = palette[i % len(palette)]
+        ax.plot(sx, sy, '--', color=color, linewidth=1.5, label=f"Simulated: {s['label']}")
+        row = {'label': s['label'], 'color': color, 'note': None, 'rmse': None, 'rmse_pct': None, 'r': None,
+               'overlap': None, 'peak_matches': [], 'mean_abs_dx': None,
+               'n_real_peaks': len(real_peaks), 'n_sim_peaks': 0}
+        lo, hi = max(rx.min(), sx.min()), min(rx.max(), sx.max())
+        mask = (rx >= lo) & (rx <= hi)
+        if mask.sum() >= 5:
+            sim_on_real = np.interp(rx[mask], sx, sy)
+            resid = ry[mask] - sim_on_real
+            rmse = float(np.sqrt(np.mean(resid ** 2)))
+            span = float(np.ptp(ry[mask])) or 1.0
+            row.update(rmse=rmse, rmse_pct=100 * rmse / span, overlap=(float(lo), float(hi)))
+            if np.std(ry[mask]) > 0 and np.std(sim_on_real) > 0:
+                row['r'] = float(np.corrcoef(ry[mask], sim_on_real)[0, 1])
+            if ax_res is not None:
+                ax_res.plot(rx[mask], resid, color=color, linewidth=1.1)
+        else:
+            row['note'] = "The x ranges barely overlap, so there's nothing to compare."
+        sim_peaks = peak_positions(sx, sy)
+        row['n_sim_peaks'] = len(sim_peaks)
+        if len(real_peaks) and len(sim_peaks):
+            for p in real_peaks[:10]:
+                q = sim_peaks[int(np.argmin(np.abs(sim_peaks - p)))]
+                row['peak_matches'].append((float(p), float(q), float(q - p)))
+            row['mean_abs_dx'] = float(np.mean([abs(m[2]) for m in row['peak_matches']]))
+        rows.append(row)
+
+    ax.set_ylabel('Normalized intensity' if normalize else 'Signal')
+    ax.grid(alpha=0.25)
+    ax.legend(fontsize=8, framealpha=0.9)
+    if ax_res is not None:
+        ax_res.axhline(0, color='#999', linewidth=0.8)
+        ax_res.set_ylabel('Real \u2212 sim')
+        ax_res.set_xlabel('X')
+        ax_res.grid(alpha=0.25)
+    else:
+        ax.set_xlabel('X')
+    fig.tight_layout()
+    base = f"compare_{int(time.time() * 1000)}"
+    plot_filename = f"{base}.png"
+    fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], plot_filename), dpi=130)
+    fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], f"{base}.svg"))
+    fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], f"{base}.pdf"))
+    plt.close(fig)
+    return {'plot_filename': plot_filename, 'rows': rows, 'errors': errors, 'normalized': normalize}
+
+
+def build_compare_context(candidates, saved):
+    """Works out what the Compare tab should show: which real file, which simulated files,
+    and the resulting plot. Falls back to the first real file and the newest simulation so the
+    tab is useful the moment it opens."""
+    real_files = [f for f in candidates if not f.is_simulated]
+    sim_files = [f for f in candidates if f.is_simulated and is_xy_curve_file(f)]
+    saved = saved or {}
+    real_id = saved.get('real_id') if saved.get('real_id') in {f.id for f in real_files} else (real_files[0].id if real_files else None)
+    sim_ids = [i for i in saved.get('sim_ids', []) if i in {f.id for f in sim_files}] or ([sim_files[0].id] if sim_files else [])
+    normalize = saved.get('normalize', True)
+    residual = saved.get('residual', True)
+    result = compare_real_vs_simulated(real_id, sim_ids, normalize, residual) if (real_id and sim_ids) else None
+    return {'real_files': real_files, 'sim_files': sim_files, 'real_id': real_id, 'sim_ids': sim_ids,
+            'normalize': normalize, 'residual': residual, 'result': result}
+
+
+@app.route('/characterizations/data/technique/<slug>/compare-settings', methods=['POST'])
+def tech_compare_settings(slug):
+    if TECHNIQUE_SLUGS.get(slug) not in simulate.SIM_SPECS:
+        abort(404)
+    state = tech_get_state(slug)
+    state['compare'] = {
+        'real_id': request.form.get('real_id', type=int),
+        'sim_ids': [int(i) for i in request.form.getlist('sim_ids') if i.isdigit()],
+        'normalize': request.form.get('normalize') == 'on',
+        'residual': request.form.get('residual') == 'on',
+    }
+    tech_save_state(slug, state)
+    return redirect(url_for('technique_workspace', slug=slug, tab='Compare'))
+
+
+@app.route('/characterizations/data/compare-settings', methods=['POST'])
+def dp_compare_settings():
+    state = dp_get_state()
+    state['compare'] = {
+        'real_id': request.form.get('real_id', type=int),
+        'sim_ids': [int(i) for i in request.form.getlist('sim_ids') if i.isdigit()],
+        'normalize': request.form.get('normalize') == 'on',
+        'residual': request.form.get('residual') == 'on',
+    }
+    dp_save_state(state)
+    return redirect(url_for('data_interpretation_workspace', tab='compare'))
+
+
 def fit_calibration_and_quantify(standards, unknowns, plot_prefix):
     """Fits a linear calibration curve (peak area vs concentration) through pasted standards,
     then back-calculates concentration for each pasted unknown from its peak area — the
@@ -3969,6 +4108,13 @@ def data_interpretation_workspace():
     if tab in ('plot', 'format', 'derivative', 'analysis') and state['file_ids']:
         plot_filename, results, plot_errors, overall_analysis = dp_render_plot(state)
 
+    compare_ctx = None
+    if tab == 'compare':
+        # same scope as this workspace's Simulate tab: generic curves, not technique-specific simulations
+        compare_ctx = build_compare_context([f for f in all_files if not (f.is_simulated and f.technique_name)], state.get('compare'))
+        if compare_ctx['result']:
+            plot_filename = compare_ctx['result']['plot_filename']
+
     curve_specs, simulated_files = None, []
     if tab == 'simulate':
         curve_specs = simulate.CURVE_SPECS
@@ -3988,6 +4134,7 @@ def data_interpretation_workspace():
         selected_files=selected_files,
         snapshots=snapshots,
         curve_specs=curve_specs,
+        compare_ctx=compare_ctx,
         simulated_files=simulated_files,
         sim_error=session.pop('sim_error', None),
         plot_filename=plot_filename,
@@ -6714,15 +6861,15 @@ def delete_group(group_id):
 
 
 if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
     if os.environ.get('PRODUCTION', '0').lower() in ('1', 'true', 'yes'):
         # Flask's own server (below) is explicitly unfit for production, even with
         # debug off — no concurrency, no hardening against slow/malformed clients.
         # waitress is a real WSGI server and works the same on Windows and Linux.
         from waitress import serve
-        port = int(os.environ.get('PORT', 5000))
         app.logger.info(f'Serving with waitress on 0.0.0.0:{port}')
         serve(app, host='0.0.0.0', port=port)
     else:
         # use_reloader is kept on regardless — it's just a local file-watcher and,
         # unlike debug, carries no risk of exposing the interactive debugger.
-        app.run(debug=DEBUG_MODE, use_reloader=True)
+        app.run(debug=DEBUG_MODE, port=port, use_reloader=True)

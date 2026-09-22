@@ -188,6 +188,43 @@
 				})();
 			</script>
 
+			<h3 style="margin: 1.6em 0 0.4em 0; font-size: 1.05em;">Select experimental files</h3>
+			<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+				<form method="POST" action="{{ url_for('upload_data_file') }}" enctype="multipart/form-data">
+					<input type="hidden" name="technique" value="{{ technique_name }}" />
+					<input type="hidden" name="slug" value="{{ slug }}" />
+					<div class="field">
+						<label for="data_file">Import new file(s)</label>
+						<input type="file" id="data_file" name="data_file" multiple />
+					</div>
+					<div class="field">
+						<label for="label">Label (optional)</label>
+						<input type="text" id="label" name="label" placeholder="e.g. Sample 3 — Control" />
+					</div>
+					<ul class="actions"><li><input type="submit" value="Import" class="button" /></li></ul>
+				</form>
+			</div>
+
+			{% set real_files = all_files|rejectattr('is_simulated')|list %}
+			{% if real_files %}
+			<form method="POST" action="{{ url_for('tech_select_files', slug=slug) }}" style="margin-bottom: 1.6em;">
+				<div style="max-height: 280px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 0.8em; margin-bottom: 1em;">
+					{% for f in real_files %}
+					<label style="display: flex; align-items: center; gap: 0.6em; padding: 0.4em 0; border-bottom: 1px solid #eee; cursor: pointer; font-size: 0.9em;">
+						<input type="checkbox" name="file_ids" value="{{ f.id }}" {% if f.id in state.file_ids %}checked{% endif %} />
+						<span style="flex: 1;"><strong>{{ f.label or f.original_filename }}</strong><br><span style="color:#888; font-size:0.85em;">{{ f.uploaded_at.strftime('%Y-%m-%d') }}</span></span>
+						<button type="button" onclick="event.preventDefault(); deleteSpecFile({{ f.id }}, this);" title="Delete this file"
+								style="background: none; border: none; color: #b3261e; cursor: pointer; font-size: 1em; padding: 0.2em 0.5em;">✕</button>
+					</label>
+					{% endfor %}
+				</div>
+				<ul class="actions">
+					<li><input type="submit" value="Use selected experimental files →" class="primary" /></li>
+					<li><button type="button" id="spec-bulk-delete" onclick="bulkDeleteSpecFiles(this)" class="button" style="background: #2b6cb0 !important; box-shadow: none !important; color: #fff !important;">Delete selected</button></li>
+				</ul>
+			</form>
+			{% endif %}
+
 			<h3 style="margin: 1.6em 0 0.4em 0; font-size: 1.05em;">Select simulated files</h3>
 			{% if simulated_files %}
 			<p style="font-size: 0.82em; color: #888; margin: 0 0 0.8em 0;">Your simulated data lives here, separate from real uploads. Tick one or more and use them &mdash; this replaces your current file selection.</p>
@@ -247,6 +284,10 @@
 			{% else %}
 			<p style="color: #888; font-size: 0.9em;">Nothing simulated yet &mdash; generate something above and it will appear here.</p>
 			{% endif %}
+
+		{% elif active_tab == 'Compare' %}
+			{% set compare_action = url_for('tech_compare_settings', slug=slug) %}
+			{% include '_compare_panel.html' %}
 
 		{% elif active_tab == plot_tab_name %}
 			{% if not selected_files %}
