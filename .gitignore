@@ -17,3 +17,7 @@ html5up-phantom/__pycache__/
 
 # Application log files
 html5up-phantom/logs/
+
+# LabLogbook moved to its own private repo (github.com/ssklpu912-glitch/LabLogbook_app);
+# the folder is a separate git repo now and must never be committed here.
+html5up-phantom/
