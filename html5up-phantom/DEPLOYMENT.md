@@ -9,18 +9,13 @@ python app.py
 ```
 
 With no `DATABASE_URL` or `REDIS_URL` set, the app uses a single-machine setup:
-SQLite at `instance/users.db`, sessions on disk in `instance/sessions/`, rate limits in
-memory, and DFT runs inline in the request. PySCF has no Windows build, so DFT itself
-only works on Linux/macOS; the page says so instead of erroring.
+SQLite at `instance/users.db`, sessions on disk in `instance/sessions/`, and rate
+limits in memory.
 
 ## Production
 
-Two processes from the same code, plus Postgres and Redis:
-
-| Process | Command | Notes |
-|---|---|---|
-| web | `python app.py` with `PRODUCTION=1` | waitress; applies pending migrations on start |
-| compute worker | `rq worker compute --url $REDIS_URL` | runs DFT jobs; run N of them to allow N concurrent DFT runs |
+One web process — `python app.py` with `PRODUCTION=1` (waitress; applies pending
+migrations on start) — plus Postgres and Redis.
 
 ### Environment variables
 
@@ -29,7 +24,7 @@ Two processes from the same code, plus Postgres and Redis:
 | `PRODUCTION=1` | yes | waitress instead of the dev server; disables `DEV_AUTOLOGIN` |
 | `FLASK_SECRET_KEY` | yes | long random string; keep it stable or everyone is signed out |
 | `DATABASE_URL` | yes | e.g. `postgresql://user:pass@db:5432/lablogbook` (`postgres://` also accepted) |
-| `REDIS_URL` | yes | e.g. `redis://redis:6379/0` — sessions, rate limits, compute queue |
+| `REDIS_URL` | yes | e.g. `redis://redis:6379/0` — sessions and rate limits |
 | `BEHIND_PROXY=1` | behind Caddy/Nginx | trust one proxy hop's `X-Forwarded-*` (real client IPs, https links) |
 | `SESSION_COOKIE_SECURE=1` | once HTTPS works | never before — sign-in silently breaks over plain HTTP |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM` | for password reset | transactional email provider |

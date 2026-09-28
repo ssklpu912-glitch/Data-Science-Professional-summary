@@ -8,9 +8,6 @@ from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
 from cachelib import FileSystemCache
 import redis
-from rq import Queue
-from rq.job import Job
-from rq.exceptions import NoSuchJobError
 from sqlalchemy import or_, func, inspect as sa_inspect
 import simulate
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -50,7 +47,6 @@ from skimage.measure import label, regionprops
 from skimage.feature import canny
 from skimage.restoration import unwrap_phase
 from afm_formats import try_parse_afm_native, NATIVE_EXTENSIONS as AFM_NATIVE_EXTENSIONS, UNPARSED_EXTENSIONS as AFM_UNPARSED_EXTENSIONS
-import computational
 import confocal
 
 def _load_secret_key():
@@ -92,9 +88,9 @@ def _database_url():
     return url
 
 
-# Redis backs sessions, rate-limit counters and the compute job queue in production.
-# Unset locally (no Redis on Windows), where each falls back to a single-machine
-# equivalent: sessions on disk, limits in memory, compute jobs run inline.
+# Redis backs sessions and rate-limit counters in production. Unset locally (no Redis
+# on Windows), where each falls back to a single-machine equivalent: sessions on disk,
+# limits in memory.
 REDIS_URL = os.environ.get('REDIS_URL', '').strip() or None
 redis_conn = redis.Redis.from_url(REDIS_URL) if REDIS_URL else None
 
@@ -122,7 +118,7 @@ app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', '0
 
 # Server-side sessions: the cookie holds only a random session id. Flask's default
 # cookie session is capped at ~4 KB and silently stops saving past that — and this app
-# keeps per-technique plot state, compute results and DFT geometries in the session.
+# keeps per-technique plot, peak and format state in the session.
 # JSON (not msgpack) keeps the old cookie session's behaviour of turning int dict keys
 # into strings, which existing session-reading code relies on.
 app.config['SESSION_PERMANENT'] = False
@@ -166,26 +162,6 @@ def _login_email_key():
     brute-forced from many IPs at once."""
     return 'login-email:' + (request.form.get('email') or '').strip().lower()
 
-
-# Compute routes are the expensive ones — and the obvious target for someone trying to
-# tie up the server. Limits are per account (see _rate_limit_key).
-MC_RATE_LIMIT = '20 per minute;200 per hour'
-DFT_RATE_LIMIT = '5 per minute;30 per hour'
-# DFT runs for up to about a minute — too long to hold a web thread, since a handful of
-# concurrent runs would stall every other page. With Redis configured it's queued for the
-# separate compute worker (`rq worker compute`) and the page polls until it's done; the
-# number of worker processes is then the hard cap on concurrent DFT runs. Without Redis
-# (local development) it still runs inline in the request.
-compute_queue = Queue('compute', connection=redis_conn) if redis_conn is not None else None
-DFT_JOB_TIMEOUT = 600            # seconds a worker may spend on one DFT run before it's killed
-COMP_JOB_KEEP_SECONDS = 86400    # how long a finished job's result waits to be picked up
-
-COMP_ENDPOINT_TABS = {
-    'comp_run_ising': 'Ising Model',
-    'comp_run_mc_integration': 'Monte Carlo Integration',
-    'comp_run_random_walk': 'Random Walk',
-    'comp_run_dft': 'Run Calculation',
-}
 
 # In debug mode Flask's reloader already prints everything to the console. Outside
 # debug mode (i.e. any real deployment), nothing is logged anywhere by default —
@@ -671,12 +647,6 @@ def too_large(e):
 
 @app.errorhandler(429)
 def too_many_requests(e):
-    # Compute forms redirect back to their tab with an inline error, like any other
-    # compute failure, instead of dropping the user on a bare error page.
-    if request.endpoint and request.endpoint.startswith('comp_run_') and request.view_args:
-        session['comp_error'] = f'Too many calculations in a short time ({e.description}). Please wait a bit and try again.'
-        return redirect(url_for('technique_workspace', slug=request.view_args.get('slug'),
-                                tab=COMP_ENDPOINT_TABS.get(request.endpoint)))
     return render_template(
         'error.html',
         title='Too many attempts',
@@ -2549,15 +2519,7 @@ TECHNIQUE_CATEGORIES = [
     ("Mechanics & Electrochemistry", ["UTM / Nanoindentation", "Rheometer", "Cyclic Voltammetry (CV)"]),
 ]
 
-# Computational lives on its own top-level page (see computational_home()), not nested under
-# Data Interpretation's 7-category sidebar — kept as a separate list for that reason, and merged
-# with TECHNIQUE_CATEGORIES below only where a technique needs to be looked up regardless of
-# which top-level page it belongs to (slug resolution, tab lookup, parent-category lookup).
-COMPUTATIONAL_CATEGORIES = [
-    ("Computational", ["Monte Carlo", "DFT (small molecule)"]),
-]
-
-ALL_TECHNIQUE_CATEGORIES = TECHNIQUE_CATEGORIES + COMPUTATIONAL_CATEGORIES
+ALL_TECHNIQUE_CATEGORIES = TECHNIQUE_CATEGORIES
 
 # Tabs shown per technique — tailored to what's actually relevant for that measurement type.
 # Techniques not listed explicitly fall back to DEFAULT_TECHNIQUE_TABS.
@@ -2597,9 +2559,6 @@ TECHNIQUE_TABS = {
     "UTM / Nanoindentation": ["Select files", "Plot Stress-Strain", "Modulus Fitting", "Format", "Analysis"],
     "Rheometer": ["Select files", "Plot", "Format", "Analysis"],
     "Cyclic Voltammetry (CV)": ["Select files", "Plot", "Format", "Derivative", "Analysis"],
-
-    "Monte Carlo": ["Ising Model", "Monte Carlo Integration", "Random Walk"],
-    "DFT (small molecule)": ["Run Calculation"],
 }
 
 
@@ -4127,19 +4086,6 @@ def data_interpretation():
     )
 
 
-@app.route('/computational')
-def computational_home():
-    techniques = dict(COMPUTATIONAL_CATEGORIES)['Computational']
-    technique_slugs = {t: slugify_technique(t) for t in techniques}
-    return render_template(
-        'computational.html',
-        page_title='Computational',
-        techniques=techniques,
-        technique_slugs=technique_slugs,
-        banner_image='images/characterizations-banner.png',
-    )
-
-
 def confocal_load_gray(data_file):
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], data_file.stored_filename)
     return np.array(Image.open(filepath).convert('L'), dtype=float)
@@ -4226,27 +4172,6 @@ def technique_workspace(slug):
         active_tab = tabs[0]
 
     parent_category = next((cat for cat, techs in ALL_TECHNIQUE_CATEGORIES if technique_name in techs), None)
-
-    if parent_category == 'Computational':
-        job_running = _comp_collect_job(slug)
-        comp_key = f'comp_state_{slug}'
-        comp_state = session.get(comp_key, {})
-        return render_template(
-            'technique_workspace_computational.html',
-            page_title=technique_name,
-            technique_name=technique_name,
-            slug=slug,
-            tabs=tabs,
-            active_tab=active_tab,
-            parent_category=parent_category,
-            mc_integrals=computational.MC_INTEGRALS,
-            dft_basis_options=computational.DFT_BASIS_OPTIONS,
-            dft_functional_options=computational.DFT_FUNCTIONAL_OPTIONS,
-            result=comp_state.get(active_tab),
-            comp_error=session.pop('comp_error', None),
-            job_running=job_running,
-            banner_image='images/characterizations-banner.png',
-        )
 
     # Spectroscopy techniques get the fully wired workflow; others still show the placeholder for now.
     # EDS/EDX is grouped under Microscopy & Imaging (it's acquired alongside SEM/TEM imaging) but is
@@ -5063,176 +4988,6 @@ def save_simulated_file(technique_name, result):
     db.session.add(data_file)
     db.session.commit()
     return data_file
-
-
-def _comp_save_result(slug, tab_name, result):
-    comp_key = f'comp_state_{slug}'
-    state = session.get(comp_key, {})
-    state[tab_name] = result
-    session[comp_key] = state
-
-
-@app.route('/characterizations/computational/<slug>/run-ising', methods=['POST'])
-@limiter.limit(MC_RATE_LIMIT)
-def comp_run_ising(slug):
-    if TECHNIQUE_SLUGS.get(slug) != 'Monte Carlo':
-        abort(404)
-    try:
-        L = int(request.form.get('L', 32))
-        temperature = float(request.form.get('temperature', 2.269))
-        n_sweeps = int(request.form.get('n_sweeps', 400))
-        seed_raw = request.form.get('seed', '').strip()
-        seed = int(seed_raw) if seed_raw else None
-        result = computational.run_ising_2d(
-            L=L, temperature=temperature, n_sweeps=n_sweeps, seed=seed,
-            out_dir=app.config['UPLOAD_FOLDER'], tag='u{}_'.format(session.get('user_id', 0)),
-        )
-    except Exception as e:
-        session['comp_error'] = f'Ising simulation failed: {e}'
-        return redirect(url_for('technique_workspace', slug=slug, tab='Ising Model'))
-    _comp_save_result(slug, 'Ising Model', result)
-    return redirect(url_for('technique_workspace', slug=slug, tab='Ising Model'))
-
-
-@app.route('/characterizations/computational/<slug>/run-mc-integration', methods=['POST'])
-@limiter.limit(MC_RATE_LIMIT)
-def comp_run_mc_integration(slug):
-    if TECHNIQUE_SLUGS.get(slug) != 'Monte Carlo':
-        abort(404)
-    try:
-        target = request.form.get('target', 'circle')
-        n_samples = int(request.form.get('n_samples', 100000))
-        seed_raw = request.form.get('seed', '').strip()
-        seed = int(seed_raw) if seed_raw else None
-        result = computational.run_mc_integration(
-            target=target, n_samples=n_samples, seed=seed,
-            out_dir=app.config['UPLOAD_FOLDER'], tag='u{}_'.format(session.get('user_id', 0)),
-        )
-    except Exception as e:
-        session['comp_error'] = f'Monte Carlo integration failed: {e}'
-        return redirect(url_for('technique_workspace', slug=slug, tab='Monte Carlo Integration'))
-    _comp_save_result(slug, 'Monte Carlo Integration', result)
-    return redirect(url_for('technique_workspace', slug=slug, tab='Monte Carlo Integration'))
-
-
-@app.route('/characterizations/computational/<slug>/run-random-walk', methods=['POST'])
-@limiter.limit(MC_RATE_LIMIT)
-def comp_run_random_walk(slug):
-    if TECHNIQUE_SLUGS.get(slug) != 'Monte Carlo':
-        abort(404)
-    try:
-        n_steps = int(request.form.get('n_steps', 2000))
-        n_walkers = int(request.form.get('n_walkers', 200))
-        dim = int(request.form.get('dim', 2))
-        step_size = float(request.form.get('step_size', 1.0))
-        seed_raw = request.form.get('seed', '').strip()
-        seed = int(seed_raw) if seed_raw else None
-        result = computational.run_random_walk(
-            n_steps=n_steps, n_walkers=n_walkers, dim=dim, step_size=step_size, seed=seed,
-            out_dir=app.config['UPLOAD_FOLDER'], tag='u{}_'.format(session.get('user_id', 0)),
-        )
-    except Exception as e:
-        session['comp_error'] = f'Random walk simulation failed: {e}'
-        return redirect(url_for('technique_workspace', slug=slug, tab='Random Walk'))
-    _comp_save_result(slug, 'Random Walk', result)
-    return redirect(url_for('technique_workspace', slug=slug, tab='Random Walk'))
-
-
-@app.route('/characterizations/computational/<slug>/run-dft', methods=['POST'])
-@limiter.limit(DFT_RATE_LIMIT)
-def comp_run_dft(slug):
-    if TECHNIQUE_SLUGS.get(slug) != 'DFT (small molecule)':
-        abort(404)
-    back = redirect(url_for('technique_workspace', slug=slug, tab='Run Calculation'))
-    input_type = request.form.get('input_type', 'smiles')
-    # The form has two inputs named "structure" — the SMILES box, then the XYZ textarea —
-    # and both are submitted whichever is visible, so pick by input type.
-    structure_fields = request.form.getlist('structure') + ['', '']
-    structure_input = (structure_fields[1] if input_type == 'xyz' else structure_fields[0]).strip()
-    basis = request.form.get('basis', '6-31g')
-    functional = request.form.get('functional', 'b3lyp')
-    label = (request.form.get('label') or '').strip()
-    if not structure_input:
-        session['comp_error'] = 'Give a SMILES string or XYZ coordinates first.'
-        return back
-    try:
-        charge = int(request.form.get('charge', 0) or 0)
-        spin = int(request.form.get('spin', 0) or 0)
-    except ValueError:
-        session['comp_error'] = 'Charge and spin must be whole numbers.'
-        return back
-    job_kwargs = dict(structure_input=structure_input, input_type=input_type, basis=basis,
-                      functional=functional, charge=charge, spin=spin, label=label)
-
-    if compute_queue is not None:
-        job_key = f'comp_job_{slug}'
-        if _comp_job_status(session.get(job_key)) in ('queued', 'started', 'deferred', 'scheduled'):
-            session['comp_error'] = 'A DFT calculation is already running for you — wait for it to finish first.'
-            return back
-        job = compute_queue.enqueue(
-            computational.run_dft_job, kwargs=job_kwargs,
-            job_timeout=DFT_JOB_TIMEOUT, result_ttl=COMP_JOB_KEEP_SECONDS,
-            failure_ttl=COMP_JOB_KEEP_SECONDS, meta={'user_id': session['user_id']},
-        )
-        session[job_key] = {'id': job.id, 'tab': 'Run Calculation'}
-        return back
-
-    outcome = computational.run_dft_job(**job_kwargs)
-    if outcome['ok']:
-        _comp_save_result(slug, 'Run Calculation', outcome['result'])
-    else:
-        session['comp_error'] = outcome['error']
-    return back
-
-
-def _comp_job_status(job_ref):
-    if not job_ref or compute_queue is None:
-        return None
-    try:
-        return Job.fetch(job_ref['id'], connection=redis_conn).get_status(refresh=False)
-    except NoSuchJobError:
-        return None
-
-
-def _comp_collect_job(slug):
-    """If this user has a queued compute job for this page, fold a finished result into
-    the page state (or surface its error). Returns True while it's still running."""
-    job_key = f'comp_job_{slug}'
-    job_ref = session.get(job_key)
-    if not job_ref or compute_queue is None:
-        return False
-    try:
-        job = Job.fetch(job_ref['id'], connection=redis_conn)
-    except NoSuchJobError:
-        session.pop(job_key, None)
-        session['comp_error'] = 'That calculation expired before its result was collected — please run it again.'
-        return False
-    if job.meta.get('user_id') != session.get('user_id'):
-        session.pop(job_key, None)
-        return False
-    status = job.get_status()
-    if status == 'finished':
-        outcome = job.return_value() or {'ok': False, 'error': 'The calculation returned no result.'}
-        if outcome.get('ok'):
-            _comp_save_result(slug, job_ref['tab'], outcome['result'])
-        else:
-            session['comp_error'] = outcome.get('error')
-        session.pop(job_key, None)
-        job.delete()
-        return False
-    if status in ('failed', 'stopped', 'canceled'):
-        # run_dft_job catches its own errors, so a failed job means the worker itself gave
-        # up on it: the timeout, or the process dying (e.g. out of memory).
-        latest = job.latest_result()
-        if latest is not None and 'JobTimeoutException' in (latest.exc_string or ''):
-            session['comp_error'] = 'The calculation took too long and was stopped — try a smaller molecule or basis set.'
-        else:
-            app.logger.error(f'Compute job {job.id} ended as {status}: {latest.exc_string if latest else "no result"}')
-            session['comp_error'] = 'The calculation stopped unexpectedly on the server — please try again.'
-        session.pop(job_key, None)
-        job.delete()
-        return False
-    return True
 
 
 @app.route('/characterizations/data/technique/<slug>/simulate', methods=['POST'])
