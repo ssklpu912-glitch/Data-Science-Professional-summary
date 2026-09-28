@@ -1,9 +1,18 @@
 {% extends "base.html" %}
 {% block title %}Lab logbook{% endblock %}
+{% block extra_head %}
+<style>
+	.home-hero h1, .auth-title { font-size: 2.25em; }
+	@media screen and (max-width: 736px) {
+		.home-hero h1, .auth-title { font-size: 1.7em; }
+	}
+</style>
+{% endblock %}
 {% block content %}
-<header>
-	<h1>Research experiment tracker</h1>
-	<p>Etiam quis viverra lorem, in semper lorem. Sed nisl arcu euismod sit amet nisi euismod sed cursus arcu elementum ipsum arcu vivamus quis venenatis orci lorem ipsum et magna feugiat veroeros aliquam. Lorem ipsum dolor sit amet nullam dolore.</p>
+<header class="home-hero" style="text-align: center;">
+	<h1>Where every discovery begins</h1>
+	<p>A comprehensive lab notebook for every researcher, from your first experiment to your published paper.<br />
+	Log experiments, track samples, analyze characterization data, and collaborate with your lab, all in one place.</p>
 </header>
 
 <section class="auth-section" style="max-width: 480px; margin: 0 auto; padding: 0;">
@@ -60,20 +69,7 @@
 		</ul>
 	</form>
 </section>
-<section>
-	<h2>Follow</h2>
-	<ul class="icons">
-		<li><a href="#" class="icon brands style2 fa-twitter"><span class="label">Twitter</span></a></li>
-		<li><a href="#" class="icon brands style2 fa-facebook-f"><span class="label">Facebook</span></a></li>
-		<li><a href="#" class="icon brands style2 fa-instagram"><span class="label">Instagram</span></a></li>
-		<li><a href="#" class="icon brands style2 fa-dribbble"><span class="label">Dribbble</span></a></li>
-		<li><a href="#" class="icon brands style2 fa-github"><span class="label">GitHub</span></a></li>
-		<li><a href="#" class="icon brands style2 fa-500px"><span class="label">500px</span></a></li>
-		<li><a href="#" class="icon solid style2 fa-phone"><span class="label">Phone</span></a></li>
-		<li><a href="#" class="icon solid style2 fa-envelope"><span class="label">Email</span></a></li>
-	</ul>
-</section>
 <ul class="copyright">
-	<li>&copy; Untitled. All rights reserved</li><li>Design: <a href="http://html5up.net">HTML5 UP</a></li>
+	<li>&copy; LabLogbook</li><li>Design: <a href="http://html5up.net">HTML5 UP</a></li>
 </ul>
 {% endblock %}

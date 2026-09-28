@@ -14,20 +14,6 @@
 		<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='images/lablogbook-logo1.svg') }}" />
 		<link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}" />
 		<noscript><link rel="stylesheet" href="{{ url_for('static', filename='css/noscript.css') }}" /></noscript>
-		<style>
-			.ftr-grid { display: flex; flex-wrap: wrap; gap: 2.5em; width: 100%; }
-			.ftr-col { flex: 1 1 200px; min-width: 180px; }
-			.ftr-col h2 {
-				font-size: 0.85em; font-weight: 700; text-transform: uppercase;
-				letter-spacing: 0.06em; color: #2a6f2a; margin: 0 0 1em 0;
-			}
-			.ftr-links { list-style: none; margin: 0; padding: 0; }
-			.ftr-links li { margin-bottom: 0.7em; }
-			.ftr-links a { color: #666; font-size: 0.92em; border-bottom-color: transparent; }
-			.ftr-links a:hover { color: #2a6f2a; }
-			.ftr-about-text { color: #777; font-size: 0.9em; line-height: 1.7; margin: 0; }
-			.ftr-copyright { width: 100%; margin-top: 3em !important; }
-		</style>
 		{% block extra_head %}{% endblock %}
 	</head>
 	<body class="is-preload">
@@ -56,13 +42,13 @@
 						<ul>
 							<li><a href="{{ url_for('index') }}">Home</a></li>
 							<li><a href="{{ url_for('profile') }}">My profile</a></li>
-							<li><a href="{{ url_for('experiments') }}">Experiments</a></li>
+							<li><a href="{{ url_for('experiments') }}">My experiments</a></li>
 							<li><a href="{{ url_for('characterizations') }}">Characterizations</a></li>
 							<li><a href="{{ url_for('data_interpretation') }}">Data interpretation</a></li>
-							<li><a href="{{ url_for('miscellaneous') }}">Research Papers</a></li>
-							<li><a href="{{ url_for('elements') }}">Elements</a></li>
 							<li><a href="{{ url_for('samples') }}">Samples</a></li>
 							<li><a href="{{ url_for('collaborate') }}">Collaborate</a></li>
+							<li><a href="{{ url_for('miscellaneous') }}">Research papers</a></li>
+							<li><a href="{{ url_for('elements') }}">Elements</a></li>
 						</ul>
 					</nav>
 				<!-- Main -->
@@ -75,43 +61,34 @@
 					<footer id="footer">
 						<div class="inner">
 							{% block footer %}
-							<div class="ftr-grid">
-								<div class="ftr-col">
-									<h2>Quick navigation</h2>
-									<ul class="ftr-links">
-										<li><a href="{{ url_for('index') }}">Home</a></li>
-										<li><a href="{{ url_for('experiments') }}">Experiments</a></li>
-										<li><a href="{{ url_for('characterizations') }}">Characterizations</a></li>
-										<li><a href="{{ url_for('miscellaneous') }}">Miscellaneous</a></li>
-										<li><a href="{{ url_for('data_interpretation') }}">Data Interpretation</a></li>
-									</ul>
-								</div>
-								<div class="ftr-col">
-									<h2>Resources</h2>
-									<ul class="ftr-links">
-										<li><a href="{{ url_for('docs') }}">Documentation / user guide</a></li>
-										<li><a href="{{ url_for('shortcuts') }}">Keyboard shortcuts &amp; tips</a></li>
-										<li><a href="{{ url_for('feedback') }}">Report a bug / feedback</a></li>
-									</ul>
-								</div>
-								<div class="ftr-col">
-									<h2>Data &amp; compliance</h2>
-									<ul class="ftr-links">
-										<li><a href="{{ url_for('data_privacy') }}#retention">Data retention &amp; backup policy</a></li>
-										<li><a href="{{ url_for('export_data') }}">Export / download all my data</a></li>
-										<li><a href="{{ url_for('data_privacy') }}#privacy">Privacy note</a></li>
-									</ul>
-								</div>
-								<div class="ftr-col">
-									<h2>About</h2>
-									<p class="ftr-about-text">
-										Version {{ app_version }} &middot; updated {{ app_last_updated }}<br />
-										Built and maintained by the LabLogbook team.
-									</p>
-								</div>
-							</div>
-							<ul class="copyright ftr-copyright">
-								<li>&copy; {{ current_year }} LabLogbook. All rights reserved.</li>
+							<section>
+								<h2>Quick links</h2>
+								<ul class="footer-links" style="list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(11em, 1fr)); gap: 0.5em 1.5em;">
+									<li><a href="{{ url_for('experiments') }}">My experiments</a></li>
+									<li><a href="{{ url_for('characterizations') }}">Characterizations</a></li>
+									<li><a href="{{ url_for('data_interpretation') }}">Data interpretation</a></li>
+									<li><a href="{{ url_for('samples') }}">Samples</a></li>
+									<li><a href="{{ url_for('collaborate') }}">Collaborate</a></li>
+									<li><a href="{{ url_for('miscellaneous') }}">Research papers</a></li>
+									<li><a href="{{ url_for('elements') }}">Elements</a></li>
+								</ul>
+							</section>
+							<section>
+								<h2>Account &amp; help</h2>
+								<ul class="footer-links" style="list-style: none; padding: 0;">
+									{% if session.get('user_id') %}
+									<li><a href="{{ url_for('profile') }}">My profile</a></li>
+									<li><a href="{{ url_for('export_data') }}">Export my data</a></li>
+									{% endif %}
+									<li><a href="{{ url_for('data_privacy') }}">Data &amp; privacy</a></li>
+									<li><a href="{{ url_for('feedback') }}">Send feedback / report a bug</a></li>
+									{% if session.get('user_id') %}
+									<li><a href="{{ url_for('logout') }}">Sign out</a></li>
+									{% endif %}
+								</ul>
+							</section>
+							<ul class="copyright">
+								<li>&copy; LabLogbook</li><li>Design: <a href="http://html5up.net">HTML5 UP</a></li>
 							</ul>
 							{% endblock %}
 						</div>
