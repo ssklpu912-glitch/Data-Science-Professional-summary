@@ -235,18 +235,27 @@
 		<h2 style="margin-top:0; font-size: 1.3em;">Analysis</h2>
 		{% if not selected_images %}
 			<p style="color: #888; font-size: 0.9em;">No images selected — go to <strong>Select images</strong> first.</p>
-		{% elif not particle_analyses %}
+		{% elif not combined_particle_analyses %}
 			<p style="color: #888; font-size: 0.9em;">No particle measurements yet for the selected image(s) — visit <strong>Measure Particles</strong> first.</p>
 		{% else %}
-			{% for pa in particle_analyses %}
+			{% for grp in combined_particle_analyses %}
 			<div style="background: #f7f7f7; border-radius: 8px; padding: 1.2em; margin-bottom: 1em;">
-				<strong>{{ pa.file.label or pa.file.original_filename }}</strong>
-				<span style="color: #888; font-size: 0.85em; margin-left: 0.5em;">{{ pa.analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
-				{% if pa.analysis.histogram_filename %}
-				<img src="{{ url_for('static', filename='uploads/' + pa.analysis.histogram_filename) }}" alt="Size distribution" style="max-width: 100%; margin-top: 0.6em; border-radius: 6px; border: 1px solid #ddd;" />
+				<strong>{{ grp.label }}</strong>
+				{% if grp.histogram_filenames|length == 1 %}
+				<img src="{{ url_for('static', filename='uploads/' + grp.histogram_filenames[0]) }}" alt="Size distribution" style="max-width: 100%; margin-top: 0.6em; border-radius: 6px; border: 1px solid #ddd;" />
+				{% elif grp.histogram_filenames %}
+				<div style="display: flex; gap: 0.6em; flex-wrap: wrap; margin-top: 0.6em;">
+					{% for hist in grp.histogram_filenames %}
+					<img src="{{ url_for('static', filename='uploads/' + hist) }}" alt="Size distribution" style="max-width: 32%; border-radius: 6px; border: 1px solid #ddd;" />
+					{% endfor %}
+				</div>
 				{% endif %}
-				<p style="margin: 0.6em 0 0 0; padding: 0.6em 0.9em; background: #eef6ee; border-left: 3px solid #4caf50; border-radius: 4px; font-size: 0.88em;">{{ pa.analysis.analysis_text }}</p>
-				<a href="{{ url_for('view_particle_analysis', analysis_id=pa.analysis.id) }}" style="font-size: 0.85em;">View full analysis →</a>
+				<p style="margin: 0.6em 0 0 0; padding: 0.6em 0.9em; background: #eef6ee; border-left: 3px solid #4caf50; border-radius: 4px; font-size: 0.88em;">{{ grp.analysis_text }}</p>
+				<div style="margin-top: 0.4em;">
+					{% for e in grp.entries %}
+					<a href="{{ url_for('view_particle_analysis', analysis_id=e.analysis.id) }}" style="font-size: 0.85em; margin-right: 1em;">View full analysis ({{ e.file.label or e.file.original_filename if e.file else 'file' }}) →</a>
+					{% endfor %}
+				</div>
 			</div>
 			{% endfor %}
 		{% endif %}

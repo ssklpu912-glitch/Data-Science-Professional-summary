@@ -4,7 +4,7 @@
 <style>
 	/* Phantom's global input styling breaks native checkboxes (hides/stretches them) —
 	   force them back to normal appearance on this page. */
-	input[type="checkbox"] {
+	input[type="checkbox"], input[type="radio"] {
 		appearance: auto !important;
 		-webkit-appearance: checkbox !important;
 		width: 16px !important;
@@ -18,6 +18,10 @@
 		background: none !important;
 		border: 1px solid #999 !important;
 		z-index: auto !important;
+	}
+	input[type="radio"] {
+		-webkit-appearance: radio !important;
+		border-radius: 50% !important;
 	}
 	#main > .inner {
 		max-width: 100% !important;
@@ -192,7 +196,7 @@
 				<div style="display: flex; gap: 0; border-bottom: 2px solid #ddd;">
 					<button type="button" onclick="switchFileTab('experimental')" id="tab-exp-btn"
 							style="flex: 1; padding: 0.8em 1em; background: #f0f0f0; border: none; cursor: pointer; font-weight: bold; color: #333; border-bottom: 3px solid #4caf50;">
-						📁 Experimental files
+						📁 Import new files
 					</button>
 					<button type="button" onclick="switchFileTab('simulated')" id="tab-sim-btn"
 							style="flex: 1; padding: 0.8em 1em; background: #f0f0f0; border: none; cursor: pointer; font-weight: bold; color: #666;">
@@ -208,7 +212,6 @@
 						<input type="hidden" name="technique" value="{{ technique_name }}" />
 						<input type="hidden" name="slug" value="{{ slug }}" />
 						<div class="field">
-							<label for="data_file">Import new file(s)</label>
 							<input type="file" id="data_file" name="data_file" multiple />
 						</div>
 						<div class="field">
@@ -347,6 +350,15 @@
 					</select>
 				</div>
 
+				<h3 style="margin: 1em 0 0.5em 0; font-size: 1em;">Layout</h3>
+				<label style="display: flex; align-items: center; gap: 0.5em; font-size: 0.9em; margin-bottom: 0.4em;">
+					<input type="radio" name="layout" value="overlay" {% if state.get('layout', 'overlay') == 'overlay' %}checked{% endif %} /> Overlay — all files on one graph
+				</label>
+				<label style="display: flex; align-items: center; gap: 0.5em; font-size: 0.9em;">
+					<input type="radio" name="layout" value="subplots" {% if state.get('layout') == 'subplots' %}checked{% endif %} /> Subplots — one panel per file
+				</label>
+				<p style="font-size: 0.8em; color: #888; margin: 0.4em 0 0 0;">Subplots need 2+ files selected, and aren't offered for the many-series colorbar view (Multi-column data with 9+ numeric columns).</p>
+
 				<h3 style="margin: 1em 0 0.5em 0; font-size: 1em;">Smoothing</h3>
 				<label style="display: flex; align-items: center; gap: 0.5em; font-size: 0.9em;">
 					<input type="checkbox" name="smoothing_enabled" {% if state.smoothing.enabled %}checked{% endif %} /> Apply Savitzky-Golay smoothing
@@ -435,98 +447,263 @@
 			{% endif %}
 			{% endif %}
 
+		{% elif active_tab == 'Baseline Correction' %}
+			{% if not selected_files %}
+				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+			{% else %}
+			<form method="GET" action="{{ url_for('technique_workspace', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em;">
+				<input type="hidden" name="tab" value="Baseline Correction" />
+				<p style="font-size: 0.85em; color: #555; margin-top: 0;">Asymmetric Least Squares (ALS) baseline — a smooth curve fit under the data, pulled down away from peaks rather than through them. Genuinely computed per file, shown against the raw spectrum before you commit to it.</p>
+				<div class="field">
+					<label for="lam">Smoothness (lambda)</label>
+					<input type="number" id="lam" name="lam" min="10" step="any" value="{{ baseline_result.params.lam if baseline_result else 100000 }}" />
+				</div>
+				<div class="field">
+					<label for="p">Asymmetry (p)</label>
+					<input type="number" id="p" name="p" min="0.001" max="0.5" step="0.001" value="{{ baseline_result.params.p if baseline_result else 0.01 }}" />
+				</div>
+				<div class="field">
+					<label for="niter">Iterations</label>
+					<input type="number" id="niter" name="niter" min="1" max="50" step="1" value="{{ baseline_result.params.niter if baseline_result else 10 }}" />
+				</div>
+				<p style="font-size: 0.8em; color: #888; margin: 0.4em 0 0 0;">Higher lambda = stiffer/smoother baseline. Lower p pulls the baseline further below peaks.</p>
+				<ul class="actions"><li><input type="submit" value="Preview" class="primary" /></li></ul>
+			</form>
+
+			{% if baseline_result %}
+				{% if baseline_result.errors %}
+				<div style="background: #fdecea; color: #b3261e; padding: 0.7em 1em; border-radius: 8px; margin-top: 1em; font-size: 0.85em;">
+					{% for e in baseline_result.errors %}<div>{{ e }}</div>{% endfor %}
+				</div>
+				{% endif %}
+				{% if baseline_result.plot_filename %}
+				<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-top: 1em;">
+					<img src="{{ url_for('static', filename='uploads/' + baseline_result.plot_filename) }}" alt="Baseline correction preview" style="max-width: 100%; border-radius: 6px; border: 1px solid #ddd;" />
+					<form method="POST" action="{{ url_for('tech_save_baseline', slug=slug) }}" style="margin-top: 1em;">
+						<input type="hidden" name="lam" value="{{ baseline_result.params.lam }}" />
+						<input type="hidden" name="p" value="{{ baseline_result.params.p }}" />
+						<input type="hidden" name="niter" value="{{ baseline_result.params.niter }}" />
+						<ul class="actions"><li><input type="submit" value="Save corrected as new file(s)" class="button" style="background: #2b6cb0 !important; box-shadow: none !important; color: #fff !important;" /></li></ul>
+						<p style="font-size: 0.8em; color: #888; margin-top: 0.4em;">Writes {{ baseline_result.n_files }} new file(s) — X unchanged, Y = raw − baseline — back into <strong>Select files</strong>, leaving the originals untouched.</p>
+					</form>
+				</div>
+				{% endif %}
+			{% endif %}
+			{% endif %}
+
+		{% elif active_tab == 'Peak Fitting' %}
+			{% if not selected_files %}
+				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+			{% else %}
+			<form method="GET" action="{{ url_for('technique_workspace', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em;">
+				<input type="hidden" name="tab" value="Peak Fitting" />
+				<p style="font-size: 0.85em; color: #555; margin-top: 0;">Deconvolution — the same thing XPS calls "peak fitting": separating overlapping chemical states into individual Gaussian components after removing the Shirley background (the standard XPS convention, not a straight line).</p>
+				<div class="field">
+					<label for="pf-file">File</label>
+					<select id="pf-file" name="file_id">
+						{% for fid, label in peak_fit_result.series_options %}
+						<option value="{{ fid }}" {% if peak_fit_result.target_file_id == fid %}selected{% endif %}>{{ label }}</option>
+						{% endfor %}
+					</select>
+				</div>
+				<div class="field">
+					<label for="background">Background</label>
+					<select id="background" name="background">
+						<option value="shirley" {% if peak_fit_result.params.background == 'shirley' %}selected{% endif %}>Shirley (standard for XPS)</option>
+						<option value="linear" {% if peak_fit_result.params.background == 'linear' %}selected{% endif %}>Linear (straight line between endpoints)</option>
+						<option value="none" {% if peak_fit_result.params.background == 'none' %}selected{% endif %}>None</option>
+					</select>
+				</div>
+				<div class="field">
+					<label for="n_peaks">Number of components</label>
+					<input type="number" id="n_peaks" name="n_peaks" min="1" max="6" step="1" value="{{ peak_fit_result.params.n_peaks if peak_fit_result else 2 }}" />
+				</div>
+				<ul class="actions"><li><input type="submit" value="Fit" class="primary" /></li></ul>
+			</form>
+
+			{% if peak_fit_result and peak_fit_result.plot_filename %}
+			<div class="cf-panel" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-top: 1em;">
+				<img src="{{ url_for('static', filename='uploads/' + peak_fit_result.plot_filename) }}" alt="Peak fit" style="max-width: 100%; border-radius: 6px; border: 1px solid #ddd;" />
+				<div style="margin-top: 0.6em; font-size: 0.9em; color: #555;">
+					Export:
+					<a href="{{ url_for('static', filename='uploads/' + peak_fit_result.plot_filename) }}" download>PNG</a> ·
+					<a href="{{ url_for('static', filename='uploads/' + peak_fit_result.plot_filename.replace('.png', '.svg')) }}" download>SVG</a> ·
+					<a href="{{ url_for('static', filename='uploads/' + peak_fit_result.plot_filename.replace('.png', '.pdf')) }}" download>PDF</a> ·
+					<a href="{{ url_for('static', filename='uploads/' + peak_fit_result.plot_filename.replace('.png', '.tiff')) }}" download>TIFF</a>
+				</div>
+				<p style="font-size: 0.8em; color: #888; margin: 0.6em 0 0 0;">Uses the same line/color/legend/label settings as <strong>Format</strong> — change them there and revisit this tab to update the figure.</p>
+				{% if peak_fit_result.components %}
+				<table style="width: 100%; margin-top: 0.8em; border-collapse: collapse; font-size: 0.85em;">
+					<thead><tr><th style="text-align:left; padding: 0.3em;">Component</th><th style="text-align:left; padding: 0.3em;">Center (eV)</th><th style="text-align:left; padding: 0.3em;">FWHM (eV)</th><th style="text-align:left; padding: 0.3em;">% area</th></tr></thead>
+					<tbody>
+						{% for c in peak_fit_result.components %}
+						<tr>
+							<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ loop.index }}</td>
+							<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ '%.2f' % c.center }}</td>
+							<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ '%.2f' % c.fwhm }}</td>
+							<td style="padding: 0.3em; border-top: 1px solid #eee;">{{ c.pct_area }}%</td>
+						</tr>
+						{% endfor %}
+					</tbody>
+				</table>
+				{% else %}
+				<p style="color: #b3261e; font-size: 0.85em; margin-top: 0.6em;">Fit did not converge — try fewer components or a different background.</p>
+				{% endif %}
+			</div>
+			{% endif %}
+			{% endif %}
+
 		{% elif active_tab == 'Format' %}
 			{% if not selected_files %}
 				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
 			{% else %}
-			<form method="POST" action="{{ url_for('tech_set_format', slug=slug) }}">
-				<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
-					<h3 style="margin-top:0; font-size: 1em;">Legend</h3>
-					<label style="display: flex; align-items: center; gap: 0.5em; margin-bottom: 0.6em; font-size: 0.9em;"><input type="checkbox" name="legend" {% if state.format.legend %}checked{% endif %} /> Show legend</label>
+			{% if technique_name == 'XPS' %}
+			<div class="cf-note" style="margin-bottom: 1.2em;">
+				XPS has two different figures — the raw spectrum and the fitted-components plot from Peak Fitting — so each gets its <strong>own</strong> Legend/Colors/Lines/Labels/Axis settings below. Pick which one you're editing:
+			</div>
+			<ul class="actions" style="margin-bottom: 1.2em;">
+				<li><a href="{{ url_for('technique_workspace', slug=slug, tab='Format', target='plot') }}" class="button {{ 'primary' if format_target != 'xps_fit' else '' }}">Raw spectrum</a></li>
+				<li><a href="{{ url_for('technique_workspace', slug=slug, tab='Format', target='xps_fit') }}" class="button {{ 'primary' if format_target == 'xps_fit' else '' }}">Fitted spectrum</a></li>
+			</ul>
+			{% endif %}
+			<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
+				<h3 style="margin-top:0; font-size: 1em;">Legend</h3>
+				<form method="POST" action="{{ url_for('tech_set_format', slug=slug) }}">
+					<input type="hidden" name="section" value="legend" />
+					<input type="hidden" name="target" value="{{ format_target }}" />
+					<label style="display: flex; align-items: center; gap: 0.5em; margin-bottom: 0.6em; font-size: 0.9em;"><input type="checkbox" name="legend" {% if display_format.legend %}checked{% endif %} /> Show legend</label>
 					<div class="field">
 						<label for="legend_loc">Position</label>
 						<select id="legend_loc" name="legend_loc">
 							{% for loc in ['best', 'upper right', 'upper left', 'lower right', 'lower left'] %}
-							<option value="{{ loc }}" {% if state.format.legend_loc == loc %}selected{% endif %}>{{ loc | capitalize }}</option>
+							<option value="{{ loc }}" {% if display_format.legend_loc == loc %}selected{% endif %}>{{ loc | capitalize }}</option>
 							{% endfor %}
 						</select>
 					</div>
 					<div class="field">
 						<label for="legend_orientation">Orientation</label>
 						<select id="legend_orientation" name="legend_orientation">
-							<option value="vertical" {% if state.format.legend_orientation == 'vertical' %}selected{% endif %}>Vertical</option>
-							<option value="horizontal" {% if state.format.legend_orientation == 'horizontal' %}selected{% endif %}>Horizontal</option>
+							<option value="vertical" {% if display_format.legend_orientation == 'vertical' %}selected{% endif %}>Vertical</option>
+							<option value="horizontal" {% if display_format.legend_orientation == 'horizontal' %}selected{% endif %}>Horizontal</option>
 						</select>
 					</div>
 					<div class="field">
-						<label for="legend_scale">Size (scale)</label>
-						<input type="number" id="legend_scale" name="legend_scale" min="0.4" max="2" step="0.1" value="{{ state.format.legend_scale }}" />
+						<label for="legend_scale">Legend text font size (scale — 1.0 = default ~9pt, 2.0 = double size)</label>
+						<input type="number" id="legend_scale" name="legend_scale" min="0.4" max="2" step="0.1" value="{{ display_format.legend_scale }}" />
 					</div>
-				</div>
+					<ul class="actions" style="margin-top: 0.8em;">
+						<li><input type="submit" value="Apply" class="primary" /></li>
+						<li><button type="submit" name="reset" value="1" class="button">Reset</button></li>
+					</ul>
+				</form>
+			</div>
 
-				<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
-					<h3 style="margin-top:0; font-size: 1em;">Colors</h3>
+			<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
+				<h3 style="margin-top:0; font-size: 1em;">Colors</h3>
+				<form method="POST" action="{{ url_for('tech_set_format', slug=slug) }}">
+					<input type="hidden" name="section" value="colors" />
+					<input type="hidden" name="target" value="{{ format_target }}" />
 					<div class="field">
 						<label for="colormap">Color map</label>
 						<select id="colormap" name="colormap">
 							{% for cm in colormap_options %}
-							<option value="{{ cm }}" {% if state.format.colormap == cm %}selected{% endif %}>{{ cm }}</option>
+							<option value="{{ cm }}" {% if display_format.colormap == cm %}selected{% endif %}>{{ cm }}</option>
 							{% endfor %}
 						</select>
 					</div>
-				</div>
+					<ul class="actions" style="margin-top: 0.8em;">
+						<li><input type="submit" value="Apply" class="primary" /></li>
+						<li><button type="submit" name="reset" value="1" class="button">Reset</button></li>
+					</ul>
+				</form>
+			</div>
 
-				<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
-					<h3 style="margin-top:0; font-size: 1em;">Lines, ticks &amp; labels</h3>
+			<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
+				<h3 style="margin-top:0; font-size: 1em;">Lines, ticks &amp; labels</h3>
+				<form method="POST" action="{{ url_for('tech_set_format', slug=slug) }}">
+					<input type="hidden" name="section" value="lines" />
+					<input type="hidden" name="target" value="{{ format_target }}" />
 					<div class="field">
 						<label for="line_width">Line thickness</label>
-						<input type="number" id="line_width" name="line_width" min="0.5" max="6" step="0.1" value="{{ state.format.line_width }}" />
+						<input type="number" id="line_width" name="line_width" min="0.5" max="6" step="0.1" value="{{ display_format.line_width }}" />
 					</div>
 					<div class="field">
 						<label for="marker_size">Marker size</label>
-						<input type="number" id="marker_size" name="marker_size" min="4" max="60" step="1" value="{{ state.format.marker_size }}" />
+						<input type="number" id="marker_size" name="marker_size" min="4" max="60" step="1" value="{{ display_format.marker_size }}" />
 					</div>
 					<div class="field">
 						<label for="tick_width">Tick thickness</label>
-						<input type="number" id="tick_width" name="tick_width" min="0.5" max="4" step="0.1" value="{{ state.format.tick_width }}" />
+						<input type="number" id="tick_width" name="tick_width" min="0.5" max="4" step="0.1" value="{{ display_format.tick_width }}" />
+					</div>
+					<label style="display: flex; align-items: center; gap: 0.5em; margin-top: 0.4em; font-size: 0.9em;"><input type="checkbox" name="grid" {% if display_format.grid %}checked{% endif %} /> Show grid</label>
+					<label style="display: flex; align-items: center; gap: 0.5em; margin-top: 0.4em; font-size: 0.9em;"><input type="checkbox" name="fill_under" {% if display_format.fill_under %}checked{% endif %} /> Fill area under curve</label>
+					<p style="font-size: 0.78em; color: #888; margin: 0.3em 0 0 0;">Line Graph mode only. Off by default — for a scan with a forward/reverse sweep (e.g. CV), only turn this on if you actually want a shaded fill; it won't look like a clean curve.</p>
+					<ul class="actions" style="margin-top: 0.8em;">
+						<li><input type="submit" value="Apply" class="primary" /></li>
+						<li><button type="submit" name="reset" value="1" class="button">Reset</button></li>
+					</ul>
+				</form>
+			</div>
+
+			<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
+				<h3 style="margin-top:0; font-size: 1em;">Axis labels</h3>
+				<form method="POST" action="{{ url_for('tech_set_format', slug=slug) }}">
+					<input type="hidden" name="section" value="axis_labels" />
+					<input type="hidden" name="target" value="{{ format_target }}" />
+					<div class="field">
+						<label for="x_label">X axis label</label>
+						<input type="text" id="x_label" name="x_label" value="{{ display_format.x_label }}" placeholder="e.g. Wavenumber (cm⁻¹)" />
 					</div>
 					<div class="field">
-						<label for="label_size">Axis label size</label>
-						<input type="number" id="label_size" name="label_size" min="6" max="24" step="1" value="{{ state.format.label_size }}" />
+						<label for="y_label">Y axis label</label>
+						<input type="text" id="y_label" name="y_label" value="{{ display_format.y_label }}" placeholder="e.g. Absorbance" />
 					</div>
-					<label style="display: flex; align-items: center; gap: 0.5em; margin-top: 0.6em; font-size: 0.9em;"><input type="checkbox" name="bold_labels" {% if state.format.bold_labels %}checked{% endif %} /> Bold axis labels</label>
-					<label style="display: flex; align-items: center; gap: 0.5em; margin-top: 0.4em; font-size: 0.9em;"><input type="checkbox" name="grid" {% if state.format.grid %}checked{% endif %} /> Show grid</label>
-				</div>
+					<div class="field">
+						<label for="label_size">Axis label font size</label>
+						<input type="number" id="label_size" name="label_size" min="6" max="32" step="1" value="{{ display_format.label_size }}" />
+					</div>
+					<label style="display: flex; align-items: center; gap: 0.5em; margin-top: 0.6em; font-size: 0.9em;"><input type="checkbox" name="bold_labels" {% if display_format.bold_labels %}checked{% endif %} /> Bold axis labels</label>
+					<ul class="actions" style="margin-top: 0.8em;">
+						<li><input type="submit" value="Apply" class="primary" /></li>
+						<li><button type="submit" name="reset" value="1" class="button">Reset</button></li>
+					</ul>
+				</form>
+			</div>
 
-				<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
-					<h3 style="margin-top:0; font-size: 1em;">Axis scaling</h3>
-					<label style="display: flex; align-items: center; gap: 0.5em; font-size: 0.9em;"><input type="checkbox" name="log_x" {% if state.format.log_x %}checked{% endif %} /> Log scale — X axis</label>
-					<label style="display: flex; align-items: center; gap: 0.5em; margin-top: 0.4em; font-size: 0.9em;"><input type="checkbox" name="log_y" {% if state.format.log_y %}checked{% endif %} /> Log scale — Y axis</label>
+			<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1em;">
+				<h3 style="margin-top:0; font-size: 1em;">Axis scaling</h3>
+				<form method="POST" action="{{ url_for('tech_set_format', slug=slug) }}">
+					<input type="hidden" name="section" value="axis" />
+					<input type="hidden" name="target" value="{{ format_target }}" />
+					<label style="display: flex; align-items: center; gap: 0.5em; font-size: 0.9em;"><input type="checkbox" name="log_x" {% if display_format.log_x %}checked{% endif %} /> Log scale — X axis</label>
+					<label style="display: flex; align-items: center; gap: 0.5em; margin-top: 0.4em; font-size: 0.9em;"><input type="checkbox" name="log_y" {% if display_format.log_y %}checked{% endif %} /> Log scale — Y axis</label>
 
 					<h3 style="margin: 1em 0 0.5em 0; font-size: 1em;">Axis range</h3>
 					<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.8em;">
 						<div class="field" style="margin: 0;">
 							<label for="x_min">X min</label>
-							<input type="number" id="x_min" name="x_min" step="any" value="{{ state.format.x_min if state.format.x_min is not none else '' }}" placeholder="auto" />
+							<input type="number" id="x_min" name="x_min" step="any" value="{{ display_format.x_min if display_format.x_min is not none else '' }}" placeholder="auto" />
 						</div>
 						<div class="field" style="margin: 0;">
 							<label for="x_max">X max</label>
-							<input type="number" id="x_max" name="x_max" step="any" value="{{ state.format.x_max if state.format.x_max is not none else '' }}" placeholder="auto" />
+							<input type="number" id="x_max" name="x_max" step="any" value="{{ display_format.x_max if display_format.x_max is not none else '' }}" placeholder="auto" />
 						</div>
 						<div class="field" style="margin: 0;">
 							<label for="y_min">Y min</label>
-							<input type="number" id="y_min" name="y_min" step="any" value="{{ state.format.y_min if state.format.y_min is not none else '' }}" placeholder="auto" />
+							<input type="number" id="y_min" name="y_min" step="any" value="{{ display_format.y_min if display_format.y_min is not none else '' }}" placeholder="auto" />
 						</div>
 						<div class="field" style="margin: 0;">
 							<label for="y_max">Y max</label>
-							<input type="number" id="y_max" name="y_max" step="any" value="{{ state.format.y_max if state.format.y_max is not none else '' }}" placeholder="auto" />
+							<input type="number" id="y_max" name="y_max" step="any" value="{{ display_format.y_max if display_format.y_max is not none else '' }}" placeholder="auto" />
 						</div>
 					</div>
 					<p style="font-size: 0.8em; color: #888; margin: 0.6em 0 0 0;">Leave blank for auto-scaling. e.g. X: 250 to 430, Y max: 6.5</p>
-				</div>
-
-				<ul class="actions"><li><input type="submit" value="Apply formatting" class="primary" /></li></ul>
-			</form>
+					<ul class="actions" style="margin-top: 0.8em;">
+						<li><input type="submit" value="Apply" class="primary" /></li>
+						<li><button type="submit" name="reset" value="1" class="button">Reset</button></li>
+					</ul>
+				</form>
+			</div>
 			{% endif %}
 
 		{% elif active_tab == 'Formula ID' %}
@@ -664,15 +841,36 @@
 					<label for="standards">Standards — one per line: concentration,peak area</label>
 					<textarea id="standards" name="standards" rows="5" placeholder="0.5,1200&#10;1.0,2350&#10;2.0,4800&#10;5.0,11900">{% if quant_result %}{% for c, a in quant_result.standards %}{{ c }},{{ a }}
 {% endfor %}{% endif %}</textarea>
+					<p style="font-size: 0.78em; color: #888; margin: 0.3em 0 0 0;">External reference values — typed by hand, since they're not something in your sample files.</p>
 				</div>
-				<div class="field">
-					<label for="unknowns">Unknown samples — one per line: label,peak area</label>
-					<textarea id="unknowns" name="unknowns" rows="4" placeholder="Sample A,3100&#10;Sample B,7600">{% if quant_result %}{% for lbl, a in quant_result.unknowns_raw %}{{ lbl }},{{ a }}
-{% endfor %}{% endif %}</textarea>
+
+				<h3 style="margin: 1.2em 0 0.6em 0; font-size: 1em;">Unknown samples</h3>
+				<p style="font-size: 0.85em; color: #555; margin: 0 0 0.8em 0;">Each selected file's own chromatogram, peaks numbered in the order detected. Uncheck a file to leave it out of this fit, or pick a different peak if it isn't the one you want quantified.</p>
+				{% for opt in quant_file_options %}
+				<div style="background: #fff; border: 1px solid #e5e5e5; border-radius: 8px; padding: 1em; margin-bottom: 0.8em;">
+					<label style="display: flex; align-items: center; gap: 0.5em; font-size: 0.9em; margin-bottom: 0.6em;">
+						<input type="checkbox" name="include_{{ opt.file_id }}" {% if opt.peaks %}checked{% endif %} {% if not opt.peaks %}disabled{% endif %} />
+						<strong>{{ opt.label }}</strong>
+					</label>
+					{% if opt.peaks %}
+					<img src="{{ url_for('static', filename='uploads/' + opt.plot_filename) }}" alt="Chromatogram for {{ opt.label }}" style="max-width: 100%; border-radius: 6px; border: 1px solid #eee; margin-bottom: 0.6em;" />
+					<div style="display: flex; flex-wrap: wrap; gap: 0.8em;">
+						{% for p in opt.peaks %}
+						<label style="display: flex; align-items: center; gap: 0.4em; font-size: 0.85em; background: #f7f7f7; padding: 0.3em 0.6em; border-radius: 6px;">
+							<input type="radio" name="peak_{{ opt.file_id }}" value="{{ loop.index0 }}" {% if loop.index0 == opt.default_idx %}checked{% endif %} />
+							Peak {{ loop.index }} — RT {{ '%.3g' % p.rt }}, area {{ '%.4g' % p.area }}
+						</label>
+						{% endfor %}
+					</div>
+					{% else %}
+					<p style="color: #b3261e; font-size: 0.85em; margin: 0;">No peak detected — adjust prominence/height in <strong>Peak Picking</strong> if this file should have one.</p>
+					{% endif %}
 				</div>
-				<ul class="actions"><li><input type="submit" value="Fit calibration curve" class="primary" /></li></ul>
+				{% endfor %}
+
+				<ul class="actions" style="margin-top: 1em;"><li><input type="submit" value="Fit calibration curve" class="primary" /></li></ul>
 			</form>
-			<p style="font-size: 0.8em; color: #888; margin: -0.6em 0 1em 0;">Fits a linear calibration curve (peak area vs concentration) through your standards, then back-calculates concentration for each unknown from its peak area. Not persisted — log any final values you want to keep in the sample's own record.</p>
+			<p style="font-size: 0.8em; color: #888; margin: -0.6em 0 1em 0;">Fits a linear calibration curve (peak area vs concentration) through your standards, then back-calculates concentration for each checked unknown from its chosen peak's area. For multiple compounds per run, use Peak Integration's retention-time library instead — it identifies and calibrates each named compound individually. Not persisted — log any final values you want to keep in the sample's own record.</p>
 
 			{% if quant_result %}
 				{% if quant_result.error %}
@@ -809,7 +1007,9 @@
 					<p style="margin: 0.4em 0 0 0; font-size: 0.85em;">{{ r.analysis }}</p>
 				</div>
 				{% endfor %}
+				{% if technique_name in ('FTIR', 'Raman', 'NMR (1H, 13C)', 'CD (Circular Dichroism)', 'EDS/EDX', 'XPS') %}
 				<p style="font-size: 0.75em; color: #999; margin: 0.5em 0 1.2em 0;">Peak assignments are approximate reference-table matches, not a substitute for expert interpretation.</p>
+				{% endif %}
 				{% endif %}
 
 				<details>
@@ -824,6 +1024,22 @@
 					{% endfor %}
 				</details>
 			{% endif %}
+
+		{% elif active_tab == 'Derivative' %}
+			{% if not selected_files %}
+				<p style="color: #888; font-size: 0.9em;">No files selected — go to <strong>Select files</strong> first.</p>
+			{% else %}
+			<form method="POST" action="{{ url_for('tech_set_derivative', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em;">
+				<label style="display: flex; align-items: center; gap: 0.5em; font-size: 0.9em;">
+					<input type="checkbox" name="derivative" {% if state.derivative %}checked{% endif %} /> Plot dY/dX instead of the raw curve
+				</label>
+				<p style="font-size: 0.8em; color: #888; margin: 0.6em 0 0 0;">Useful for locating inflection points (e.g. peak potentials in a CV scan) that are easy to miss on the raw curve. Applies to <strong>{{ plot_tab_name }}</strong> too, until turned off here.</p>
+				<ul class="actions" style="margin-top: 0.8em;"><li><input type="submit" value="Apply" class="primary" /></li></ul>
+			</form>
+			{% endif %}
+
+		{% else %}
+			<p style="color: #888; font-size: 0.9em;">The <strong>{{ active_tab }}</strong> workflow isn't built yet — Select files, {{ plot_tab_name }}, Format, and Analysis all work; this tab doesn't.</p>
 		{% endif %}
 	</div>
 
@@ -836,12 +1052,26 @@
 				Export:
 				<a href="{{ url_for('static', filename='uploads/' + plot_filename) }}" download>PNG</a> ·
 				<a href="{{ url_for('static', filename='uploads/' + plot_filename.replace('.png', '.svg')) }}" download>SVG</a> ·
-				<a href="{{ url_for('static', filename='uploads/' + plot_filename.replace('.png', '.pdf')) }}" download>PDF</a>
+				<a href="{{ url_for('static', filename='uploads/' + plot_filename.replace('.png', '.pdf')) }}" download>PDF</a> ·
+				<a href="{{ url_for('static', filename='uploads/' + plot_filename.replace('.png', '.tiff')) }}" download>TIFF</a>
 			</div>
 		{% else %}
 			<div style="background: #f7f7f7; border-radius: 10px; padding: 3em; text-align: center; color: #888;">
 				<p style="margin: 0;">No plot yet. Select files, then go to <strong>{{ plot_tab_name }}</strong> and click Plot.</p>
 			</div>
+		{% endif %}
+
+		{% if active_tab == 'Format' and technique_name == 'XPS' and peak_fit_result and peak_fit_result.plot_filename %}
+			<h2 style="font-size: 1.3em; margin: 1.5em 0 0 0;">Fitted spectrum ({{ peak_fit_result.target_label }})</h2>
+			<img src="{{ url_for('static', filename='uploads/' + peak_fit_result.plot_filename) }}" alt="Peak fit" style="max-width: 100%; border-radius: 8px; border: 1px solid #ddd;" />
+			<div style="margin-top: 0.8em; font-size: 0.9em; color: #555;">
+				Export:
+				<a href="{{ url_for('static', filename='uploads/' + peak_fit_result.plot_filename) }}" download>PNG</a> ·
+				<a href="{{ url_for('static', filename='uploads/' + peak_fit_result.plot_filename.replace('.png', '.svg')) }}" download>SVG</a> ·
+				<a href="{{ url_for('static', filename='uploads/' + peak_fit_result.plot_filename.replace('.png', '.pdf')) }}" download>PDF</a> ·
+				<a href="{{ url_for('static', filename='uploads/' + peak_fit_result.plot_filename.replace('.png', '.tiff')) }}" download>TIFF</a>
+			</div>
+			<p style="font-size: 0.8em; color: #888; margin: 0.5em 0 0 0;">Reflects whatever component count/background is currently set in <strong>Peak Fitting</strong> — updates live as you change settings here.</p>
 		{% endif %}
 	</div>
 </div>

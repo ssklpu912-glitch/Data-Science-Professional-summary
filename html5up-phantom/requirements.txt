@@ -11,3 +11,16 @@ Pillow==12.3.0
 scipy==1.18.0
 scikit-image==0.26.0
 waitress==3.0.2
+# AFM vendor file readers (afm_formats.py). AFMReader and pySPM themselves live in
+# requirements-nodeps.txt because pySPM pins numpy<2; these are their real runtime deps.
+igor2==0.5.13
+NSFopen==2.2.4
+h5py==3.16.0
+loguru==0.7.3
+ruamel.yaml==0.19.1
+tifffile==2026.9.9
+tqdm==4.70.1
+# Computational module (computational.py). PySCF ships no Windows wheels, so DFT
+# only runs on Linux/macOS (i.e. the production server); locally it errors cleanly.
+rdkit==2026.3.6
+pyscf==2.14.0; sys_platform != "win32"

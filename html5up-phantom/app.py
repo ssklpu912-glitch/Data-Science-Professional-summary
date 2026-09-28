@@ -31,12 +31,17 @@ import matplotlib.colors
 from PIL import Image
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks, savgol_filter, peak_widths
+from scipy import sparse
+from scipy.sparse.linalg import spsolve
+from scipy.stats import skew as scipy_skew
 from skimage.filters import gaussian, threshold_otsu
 from skimage.morphology import remove_small_objects, remove_small_holes
 from skimage.measure import label, regionprops
 from skimage.feature import canny
 from skimage.restoration import unwrap_phase
 from afm_formats import try_parse_afm_native, NATIVE_EXTENSIONS as AFM_NATIVE_EXTENSIONS, UNPARSED_EXTENSIONS as AFM_UNPARSED_EXTENSIONS
+import computational
+import confocal
 
 def _load_secret_key():
     """Prefer a real deployment secret from the environment. Falls back to a
@@ -434,6 +439,9 @@ with app.app_context():
     # it won't add new columns to an existing sqlite file, so add missing ones by hand
     def _add_missing_columns(table, columns):
         existing = {row[1] for row in db.session.execute(db.text(f"PRAGMA table_info({table})")).fetchall()}
+        if not existing:
+            # table doesn't exist (e.g. no model defines it any more) — nothing to migrate
+            return
         for col_name, col_def in columns:
             if col_name not in existing:
                 db.session.execute(db.text(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}"))
@@ -1975,8 +1983,14 @@ def dp_build_series(state):
                 errors.append(f"{f.original_filename}: not enough valid data points.")
                 continue
 
-            order = np.argsort(x)
-            x, y = x[order], y[order]
+            if f.technique_name != 'Cyclic Voltammetry (CV)':
+                # Sorting by X assumes Y is a function of X — true for a spectrum/chromatogram,
+                # but wrong for a CV scan: the forward and reverse sweeps pass through the same
+                # potential twice at different currents, so sorting collapses that loop into a
+                # scrambled zig-zag between the two branches (which at normal line width renders
+                # as a solid-looking filled blob). Keep the file's own recorded sweep order instead.
+                order = np.argsort(x)
+                x, y = x[order], y[order]
             label = f.label or f.original_filename
             yerr = None
 
@@ -2043,7 +2057,6 @@ def build_electrochemical_analysis(series_list):
 
     parts = []
     n = len(metrics)
-    parts.append(f"Cyclic voltammetry analysis across {n} scan(s):")
 
     ipa_vals = [m['ipa'] for m in metrics]
     ipc_vals = [m['ipc'] for m in metrics]
@@ -2390,6 +2403,16 @@ TECHNIQUE_CATEGORIES = [
     ("Mechanics & Electrochemistry", ["UTM / Nanoindentation", "Rheometer", "Cyclic Voltammetry (CV)"]),
 ]
 
+# Computational lives on its own top-level page (see computational_home()), not nested under
+# Data Interpretation's 7-category sidebar — kept as a separate list for that reason, and merged
+# with TECHNIQUE_CATEGORIES below only where a technique needs to be looked up regardless of
+# which top-level page it belongs to (slug resolution, tab lookup, parent-category lookup).
+COMPUTATIONAL_CATEGORIES = [
+    ("Computational", ["Monte Carlo", "DFT (small molecule)"]),
+]
+
+ALL_TECHNIQUE_CATEGORIES = TECHNIQUE_CATEGORIES + COMPUTATIONAL_CATEGORIES
+
 # Tabs shown per technique — tailored to what's actually relevant for that measurement type.
 # Techniques not listed explicitly fall back to DEFAULT_TECHNIQUE_TABS.
 DEFAULT_TECHNIQUE_TABS = ["Select files", "Plot", "Format", "Analysis"]
@@ -2409,8 +2432,8 @@ TECHNIQUE_TABS = {
 
     "SEM": ["Select images", "Measure Particles", "Porosity", "Roughness", "Analysis"],
     "AFM": ["Select data", "Topography", "Mechanical", "Electrical", "Magnetic", "Chemical / Frictional", "Biological", "Analysis"],
-    "TEM": ["Select images", "Measure Particles", "Layer Thickness", "Defects", "SAED", "Lattice Fringes", "Strain Mapping", "Analysis"],
-    "Confocal / Fluorescence": ["Select images", "Measure Particles", "Analysis"],
+    "TEM": ["Select images", "Measure Particles", "Segment", "Layer Thickness", "Defects", "SAED", "Lattice Fringes", "Strain Mapping", "Analysis"],
+    "Confocal / Fluorescence": ["Select images", "Preprocess", "Segment", "Measure Particles", "Analysis"],
     "EDS/EDX": ["Select files", "Simulate", "Compare", "Plot Spectrum", "Peak Picking", "Format", "Analysis"],
     "EBSD": ["Select images", "Measure Particles", "Analysis"],
 
@@ -2428,6 +2451,9 @@ TECHNIQUE_TABS = {
     "UTM / Nanoindentation": ["Select files", "Plot Stress-Strain", "Modulus Fitting", "Format", "Analysis"],
     "Rheometer": ["Select files", "Plot", "Format", "Analysis"],
     "Cyclic Voltammetry (CV)": ["Select files", "Plot", "Format", "Derivative", "Analysis"],
+
+    "Monte Carlo": ["Ising Model", "Monte Carlo Integration", "Random Walk"],
+    "DFT (small molecule)": ["Run Calculation"],
 }
 
 
@@ -2435,17 +2461,21 @@ def slugify_technique(name):
     return re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
 
 
-TECHNIQUE_SLUGS = {slugify_technique(t): t for cat, techs in TECHNIQUE_CATEGORIES for t in techs}
+TECHNIQUE_SLUGS = {slugify_technique(t): t for cat, techs in ALL_TECHNIQUE_CATEGORIES for t in techs}
 
 
 def spectrum_plot_tab_name(technique_name):
     """The literal tab name each technique uses for its base spectrum/chromatogram plot —
     shared spectrum-pipeline techniques mostly use 'Plot Spectrum', but the chromatography
-    ones use their own more accurate label."""
+    and mechanics/electrochemistry ones use their own more accurate label."""
     if technique_name == 'LC-MS':
         return 'Chromatogram'
     if technique_name == 'HPLC / GC':
         return 'Plot Chromatogram'
+    if technique_name == 'UTM / Nanoindentation':
+        return 'Plot Stress-Strain'
+    if technique_name in ('Rheometer', 'Cyclic Voltammetry (CV)'):
+        return 'Plot'
     return 'Plot Spectrum'
 
 # Plot modes allowed per technique, matching the Spectroscopy plot-type/graph-type table.
@@ -2469,11 +2499,33 @@ TECHNIQUE_PLOT_MODES = {
     "eds-edx": [("line_spectrum", "EDS/EDX Spectrum: Counts vs Energy (keV) (Line Graph)")],
     "lc-ms": [("line_spectrum", "Chromatogram: Intensity vs Retention Time (Line Graph)")],
     "hplc-gc": [("line_spectrum", "Chromatogram: Detector Signal vs Retention Time (Line Graph)")],
+    "xps": [("line_spectrum", "Binding Energy vs Intensity (Line Graph)")],
+    "utm-nanoindentation": [("line_spectrum", "Stress-Strain Curve (Line Graph)")],
+    "rheometer": [("line_spectrum", "Rheology Curve (Line Graph)")],
+    "cyclic-voltammetry-cv": [("line_spectrum", "Current vs Potential (Line Graph)")],
 }
 
 
 def tech_state_key(slug):
     return f'tech_state_{slug}'
+
+
+# Grouped by which "box" each belongs to on the Format tab, so each box can be reset to
+# its own defaults independently of the others.
+DEFAULT_TECH_FORMAT_SECTIONS = {
+    'legend': {'legend': True, 'legend_loc': 'best', 'legend_orientation': 'vertical', 'legend_scale': 1.0},
+    'colors': {'colormap': 'default'},
+    'lines': {'line_width': 1.6, 'marker_size': 18, 'tick_width': 1.0, 'grid': True, 'fill_under': False},
+    'axis_labels': {'x_label': 'X', 'y_label': 'Y', 'label_size': 11, 'bold_labels': False},
+    'axis': {'log_x': False, 'log_y': False, 'x_min': None, 'x_max': None, 'y_min': None, 'y_max': None},
+}
+
+
+def default_tech_format():
+    fmt = {}
+    for section in DEFAULT_TECH_FORMAT_SECTIONS.values():
+        fmt.update(section)
+    return fmt
 
 
 def tech_get_state(slug):
@@ -2485,12 +2537,8 @@ def tech_get_state(slug):
             'file_ids': [],
             'plot_type': modes[0][0],
             'derivative': False,
-            'format': {
-                'legend': True, 'legend_loc': 'best', 'legend_orientation': 'vertical', 'legend_scale': 1.0,
-                'line_width': 1.6, 'marker_size': 18, 'tick_width': 1.0, 'label_size': 11,
-                'bold_labels': False, 'grid': True, 'log_x': False, 'log_y': False, 'colormap': 'default',
-                'x_min': None, 'x_max': None, 'y_min': None, 'y_max': None,
-            },
+            'format': default_tech_format(),
+            'layout': 'overlay',
             'peaks': {'prominence': 0.1, 'min_height': None},
             'smoothing': {'enabled': False, 'window': 11, 'polyorder': 3},
             'wide_mode': False,
@@ -2567,6 +2615,117 @@ EDS_TABLE = [
     (5.87, 5.93, "Mn Kα (Manganese)"), (6.37, 6.43, "Fe Kα (Iron)"), (6.90, 6.96, "Co Kα (Cobalt)"),
     (7.44, 7.50, "Ni Kα (Nickel)"), (8.02, 8.08, "Cu Kα (Copper)"), (8.60, 8.66, "Zn Kα (Zinc)"),
 ]
+
+# Common XPS binding energies (eV), grouped loosely by core level — genuinely ambiguous
+# without knowing which element's core level was actually scanned (a C 1s survey covers a
+# totally different chemistry than an O 1s survey at a similar-looking number), so the
+# analysis text built from this always names the specific line, not just a bare eV value.
+XPS_TABLE = [
+    (98.0, 99.8, "Si 2p — elemental Si (Si–Si)"),
+    (102.0, 104.5, "Si 2p — SiO2 / silicate (Si–O)"),
+    (160.0, 162.5, "S 2p — sulfide (metal-S / thiolate)"),
+    (163.0, 164.5, "S 2p — thiol / disulfide / elemental S"),
+    (168.0, 170.0, "S 2p — sulfate / sulfonate (oxidized S)"),
+    (282.0, 283.3, "C 1s — metal carbide"),
+    (284.4, 285.3, "C 1s — C–C / C–H (aliphatic, incl. adventitious carbon reference)"),
+    (285.5, 286.9, "C 1s — C–O / C–N (ether, alcohol, amine)"),
+    (287.4, 289.6, "C 1s — C=O / O–C=O (carbonyl, carboxyl, ester)"),
+    (290.5, 292.5, "C 1s — π→π* shake-up (aromatic/graphitic ring)"),
+    (398.3, 399.6, "N 1s — amine / pyridinic N"),
+    (399.7, 400.6, "N 1s — amide / pyrrolic N"),
+    (400.8, 402.8, "N 1s — protonated amine / graphitic N+"),
+    (529.4, 530.6, "O 1s — metal oxide (lattice O2−)"),
+    (530.7, 532.0, "O 1s — hydroxide / oxygen-deficient oxide"),
+    (532.1, 533.8, "O 1s — C=O / C–O (organic oxygen or adsorbed water)"),
+    (74.0, 75.3, "Al 2p — metallic Al"),
+    (75.4, 76.8, "Al 2p — Al2O3 (oxidized Al)"),
+    (710.0, 711.2, "Fe 2p3/2 — Fe2+ (e.g. FeO)"),
+    (711.3, 712.8, "Fe 2p3/2 — Fe3+ (e.g. Fe2O3/Fe3O4)"),
+    (932.0, 933.3, "Cu 2p3/2 — Cu(0) / Cu(I)"),
+    (933.4, 935.5, "Cu 2p3/2 — Cu(II)"),
+]
+
+
+def shirley_background(x, y, tol=1e-6, max_iters=50):
+    """The standard XPS background — unlike a straight line between the endpoints, it
+    tracks the step the inelastic-scattering tail actually produces: background at any
+    point is proportional to the peak area still to come on the low-binding-energy side.
+    Computed iteratively (Shirley's own method) until it stops changing."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    order = np.argsort(x)
+    xs, ys = x[order], y[order]
+    y_left, y_right = float(ys[0]), float(ys[-1])
+    b = np.full_like(ys, y_right)
+    for _ in range(max_iters):
+        signal = ys - b
+        total = float(np.trapezoid(signal, xs))
+        if abs(total) < 1e-12:
+            break
+        cum = np.concatenate([[0.0], np.cumsum((signal[:-1] + signal[1:]) / 2 * np.diff(xs))])
+        area_from_here_to_end = cum[-1] - cum
+        b_new = y_right + (y_left - y_right) * (area_from_here_to_end / total)
+        if np.max(np.abs(b_new - b)) < tol:
+            b = b_new
+            break
+        b = b_new
+    b_full = np.empty_like(b)
+    b_full[order] = b
+    return b_full
+
+
+def fit_multi_gaussian_peaks(x, y, n_peaks, prominence=None):
+    """Deconvolutes a background-subtracted spectrum into n_peaks overlapping Gaussian
+    components via least-squares — genuine peak fitting (what XPS calls "peak fitting" is
+    exactly this: separating chemical states that sit too close together to show up as
+    separate maxima), not just relabeling the raw peak list. Seeds the fit from the
+    n_peaks tallest local maxima, or evenly-spaced positions if fewer real maxima exist
+    than requested. Returns (components, fitted_curve) or (None, None) if the fit fails."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n_peaks = max(1, min(6, int(n_peaks)))
+
+    idx, props = find_peaks(y, prominence=prominence or (np.ptp(y) * 0.05 or None))
+    if len(idx) >= n_peaks:
+        order = np.argsort(y[idx])[::-1][:n_peaks]
+        seed_idx = np.sort(idx[order])
+    else:
+        seed_idx = np.linspace(0, len(x) - 1, n_peaks + 2)[1:-1].astype(int)
+
+    span = float(x.max() - x.min()) or 1.0
+    width_guess = span / (n_peaks * 4)
+    p0 = []
+    bounds_lo, bounds_hi = [], []
+    for i in seed_idx:
+        p0 += [float(y[i]) or 1.0, float(x[i]), width_guess]
+        bounds_lo += [0, float(x.min()), width_guess / 10]
+        bounds_hi += [np.inf, float(x.max()), span]
+
+    def multi_gauss(xv, *params):
+        result = np.zeros_like(xv)
+        for i in range(0, len(params), 3):
+            amp, cen, wid = params[i:i + 3]
+            result = result + amp * np.exp(-((xv - cen) ** 2) / (2 * wid ** 2))
+        return result
+
+    try:
+        popt, _ = curve_fit(multi_gauss, x, y, p0=p0, bounds=(bounds_lo, bounds_hi), maxfev=20000)
+    except Exception:
+        return None, None
+
+    components = []
+    for i in range(0, len(popt), 3):
+        amp, cen, wid = popt[i:i + 3]
+        area = float(amp * abs(wid) * np.sqrt(2 * np.pi))
+        components.append({'amplitude': float(amp), 'center': float(cen), 'sigma': float(wid),
+                            'fwhm': float(2.3548 * abs(wid)), 'area': area})
+    components.sort(key=lambda c: c['center'])
+    total_area = sum(c['area'] for c in components) or 1.0
+    for c in components:
+        c['pct_area'] = round(100 * c['area'] / total_area, 1)
+
+    fitted_curve = multi_gauss(x, *popt)
+    return components, fitted_curve
 
 # Common LC-MS ESI adducts: the mass added to a neutral molecule's monoisotopic mass to get
 # the observed m/z (accounts for the lost/gained electron on the charged species, not just
@@ -3007,14 +3166,124 @@ def assign_peaks(peaks, table):
     return assigned
 
 
+def synthesize_ftir_interpretation(assigned):
+    """Goes past 'this peak = this bond' to what the peaks mean *together* — the actual
+    reasoning a chemist does: is a carbonyl an ester or an acid (depends on whether an O-H
+    is also present), is a substituted-benzene pattern mono- or para- (depends on exactly
+    where its out-of-plane C-H band falls), etc. Returns None if nothing present is
+    distinctive enough to reason about, rather than forcing a comment."""
+    bands = {'oh_nh': [], 'ester_co': [], 'ketone_co': [], 'amide_co': [], 'c_o_c_n': [], 'aromatic_oop': []}
+    for x, y, d in assigned:
+        if 3200 <= x <= 3550:
+            bands['oh_nh'].append(x)
+        if 1735 <= x <= 1750:
+            bands['ester_co'].append(x)
+        if 1700 <= x <= 1725:
+            bands['ketone_co'].append(x)
+        if 1650 <= x <= 1700:
+            bands['amide_co'].append(x)
+        if 1000 <= x <= 1300:
+            bands['c_o_c_n'].append(x)
+        if 650 <= x <= 900:
+            bands['aromatic_oop'].append(x)
+
+    has_oh = bool(bands['oh_nh'])
+    has_carbonyl = bool(bands['ester_co'] or bands['ketone_co'] or bands['amide_co'])
+    parts = []
+
+    if bands['ester_co'] and not has_oh:
+        parts.append(f"The carbonyl near {bands['ester_co'][0]:.0f} cm⁻¹ sits in the ester range, and there's no broad O–H stretch above 3200 cm⁻¹ to go with it — that combination points to an ester rather than a carboxylic acid (a free acid would show both bands).")
+    elif bands['ketone_co'] and not has_oh:
+        parts.append(f"The carbonyl near {bands['ketone_co'][0]:.0f} cm⁻¹ falls in the ketone/aldehyde range without an accompanying O–H stretch, which rules out a carboxylic acid at this position.")
+    elif has_carbonyl and has_oh:
+        parts.append("Both a carbonyl and a broad O–H/N–H stretch are present — this combination is what a carboxylic acid looks like, though it's equally consistent with an ester/ketone/amide sitting alongside a separate, unrelated hydroxyl group (residual solvent, moisture, or an -OH elsewhere on the molecule). The C-O stretch pattern and exact O-H shape (sharp vs. very broad) are what actually distinguish these.")
+    elif has_oh and not has_carbonyl:
+        parts.append("A broad O–H/N–H stretch with no carbonyl anywhere in the spectrum reads as an alcohol, amine, or simply adsorbed moisture — not a carbonyl-containing functional group.")
+
+    if bands['amide_co']:
+        parts.append(f"The band near {bands['amide_co'][0]:.0f} cm⁻¹ sits in the amide I region — if there's also an N–H stretch around 3300 cm⁻¹ and an amide II band (N–H bend/C–N stretch) near 1550 cm⁻¹, that trio is the signature of an amide bond or peptide backbone rather than a plain alkene, which only overlaps this one band.")
+
+    if bands['aromatic_oop']:
+        oop = bands['aromatic_oop'][0]
+        if 690 <= oop <= 730:
+            pattern = "monosubstituted (a companion band near 730–770 cm⁻¹ would confirm it) or meta-disubstituted"
+        elif 730 < oop <= 770:
+            pattern = "ortho-disubstituted, or monosubstituted if there's a companion band near 690–710 cm⁻¹"
+        elif 800 <= oop <= 860:
+            pattern = "para-disubstituted"
+        else:
+            pattern = "substituted"
+        parts.append(f"The aromatic C–H out-of-plane bend at {oop:.0f} cm⁻¹ is consistent with a {pattern} benzene ring — this region (675–900 cm⁻¹) is where substitution pattern actually gets read, not just 'aromatic present.'")
+
+    return " ".join(parts) if parts else None
+
+
+def synthesize_nmr_interpretation(assigned):
+    """The chemical-shift table already names each peak's likely proton environment — this
+    looks at which broad regions are occupied *together* and reasons about the molecule as a
+    whole, the way you'd actually read a 1H spectrum rather than looking up each shift alone."""
+    regions = {'aromatic': (6.5, 8.5), 'vinyl': (4.5, 6.5), 'carbinol_alpha_co': (3.3, 4.5),
+               'heteroatom_ch': (2.0, 3.3), 'aliphatic': (0.5, 2.0)}
+    present = {name: [] for name in regions}
+    for x, y, d in assigned:
+        for name, (lo, hi) in regions.items():
+            if lo <= x <= hi:
+                present[name].append(x)
+
+    parts = []
+    if present['aromatic'] and present['aliphatic'] and not present['vinyl']:
+        parts.append("Signals in both the aromatic region (6.5–8.5 ppm) and the aliphatic region (0.5–2.0 ppm), with nothing in the vinyl range, fit an aromatic ring attached to a saturated alkyl chain rather than an extended conjugated/olefinic system.")
+    elif present['vinyl'] and not present['aromatic']:
+        parts.append("Signals in the vinyl region (4.5–6.5 ppm) without any aromatic signals point to an isolated alkene rather than an aromatic ring.")
+    elif present['aromatic'] and present['vinyl']:
+        parts.append("Both aromatic (6.5–8.5 ppm) and vinyl (4.5–6.5 ppm) signals are present — consistent with a conjugated system (e.g. a styrene-type vinyl group) linking the two, rather than two unrelated environments.")
+
+    if present['heteroatom_ch'] and not present['aromatic']:
+        parts.append("Signals in the 2.0–3.3 ppm range with no aromatic peaks suggest CH adjacent to a carbonyl, halogen, or other electronegative group on an otherwise non-aromatic backbone.")
+    if present['carbinol_alpha_co']:
+        parts.append(f"The peak(s) near {present['carbinol_alpha_co'][0]:.2f} ppm sit where CH next to oxygen (e.g. O-CH2, OCH3) or a carbonyl typically appears — the exact shift and any coupling pattern (best read directly off the spectrum, not from position alone) distinguish which.")
+
+    if len(present['aliphatic']) >= 3 and not present['aromatic'] and not present['vinyl']:
+        parts.append(f"All {len(present['aliphatic'])} detected peaks fall in the aliphatic region (0.5–2.0 ppm) — consistent with a purely saturated, non-aromatic, non-olefinic structure.")
+
+    return " ".join(parts) if parts else None
+
+
+def _integrated_analysis(file_notes, overall=None, group_label=None):
+    """One integrated write-up covering every selected file, instead of a separate card
+    per file plus a summary bolted on at the end — comparison/trend context belongs in the
+    same narrative as the individual readings, not tacked on afterward. A single selected
+    file still gets its own plain note; only 2+ files get the 'across N files' framing."""
+    if not file_notes:
+        return [{'label': overall and 'Interpretation' or 'No data', 'analysis': overall or "Nothing to analyze."}] if overall else []
+    if len(file_notes) == 1:
+        text = file_notes[0][1]
+        if overall:
+            text += " " + overall
+        return [{'label': file_notes[0][0], 'analysis': text}]
+    sentences = []
+    for label, note in file_notes:
+        note = note.strip()
+        if note and note[-1] not in '.!?':
+            note += '.'
+        sentences.append(f"{label} — {note}")
+    text = f"Across the {len(file_notes)} selected files: " + " ".join(sentences)
+    if overall:
+        text += " " + overall
+    return [{'label': group_label or f"All {len(file_notes)} files", 'analysis': text}]
+
+
 def generate_spectroscopy_analysis(technique_name, series_list):
     """Produces a genuine technique-specific interpretation: peak assignments for
     vibrational/NMR/CD techniques, or computed quantities (λmax, band gap, Stokes shift)
-    for UV-Vis/Fluorescence. Falls back to basic stats if the technique isn't specially handled."""
+    for UV-Vis/Fluorescence — combined into one integrated narrative across whatever files
+    are selected, rather than a separate block per file. Falls back to basic stats if the
+    technique isn't specially handled."""
     if not series_list:
         return []
 
-    results = []
+    file_notes = []
+    overall = None
 
     if technique_name == 'FTIR':
         for s in series_list:
@@ -3023,7 +3292,10 @@ def generate_spectroscopy_analysis(technique_name, series_list):
             assigned = assign_peaks(peaks, FTIR_TABLE)
             lines = [f"{x:.0f} cm⁻¹ → {desc}" if desc else f"{x:.0f} cm⁻¹ → unassigned" for x, y, desc in assigned]
             text = f"{len(peaks)} peak(s) detected. " + ("; ".join(lines) + "." if lines else "No significant peaks found.")
-            results.append({'label': s['label'], 'analysis': text})
+            interpretation = synthesize_ftir_interpretation(assigned)
+            if interpretation:
+                text += " " + interpretation
+            file_notes.append((s['label'], text))
 
     elif technique_name == 'Raman':
         for s in series_list:
@@ -3040,7 +3312,7 @@ def generate_spectroscopy_analysis(technique_name, series_list):
                 id_ig = d_intensity / g_intensity if g_intensity else None
                 if id_ig is not None:
                     text += f" ID/IG ratio ≈ {id_ig:.2f} — {'higher disorder' if id_ig > 1 else 'more graphitic/ordered'} carbon structure."
-            results.append({'label': s['label'], 'analysis': text})
+            file_notes.append((s['label'], text))
 
     elif technique_name == 'NMR (1H, 13C)':
         for s in series_list:
@@ -3049,7 +3321,10 @@ def generate_spectroscopy_analysis(technique_name, series_list):
             assigned = assign_peaks(peaks, NMR_1H_TABLE)
             lines = [f"{x:.2f} ppm → {desc}" if desc else f"{x:.2f} ppm → unassigned" for x, y, desc in assigned]
             text = f"{len(peaks)} peak(s) detected (assuming 1H shifts). " + ("; ".join(lines) + "." if lines else "No significant peaks found.")
-            results.append({'label': s['label'], 'analysis': text})
+            interpretation = synthesize_nmr_interpretation(assigned)
+            if interpretation:
+                text += " " + interpretation
+            file_notes.append((s['label'], text))
 
     elif technique_name == 'CD (Circular Dichroism)':
         for s in series_list:
@@ -3062,7 +3337,7 @@ def generate_spectroscopy_analysis(technique_name, series_list):
             has_222 = any(218 <= x <= 225 and y < 0 for x, y, d in assigned)
             if has_208 and has_222:
                 text += " The double minima near 208 nm and 222 nm are a classic α-helix signature."
-            results.append({'label': s['label'], 'analysis': text})
+            file_notes.append((s['label'], text))
 
     elif technique_name == 'UV-Vis':
         for s in series_list:
@@ -3073,7 +3348,7 @@ def generate_spectroscopy_analysis(technique_name, series_list):
             if 190 <= lam_max <= 1100:
                 gap_ev = 1240 / lam_max
                 text += f" Approximate optical transition energy ≈ {gap_ev:.2f} eV (E = 1240/λmax — a rough estimate, not a substitute for Tauc analysis)."
-            results.append({'label': s['label'], 'analysis': text})
+            file_notes.append((s['label'], text))
 
     elif technique_name == 'Fluorescence':
         peak_positions = []
@@ -3081,14 +3356,14 @@ def generate_spectroscopy_analysis(technique_name, series_list):
             peak_idx = int(np.argmax(s['y']))
             lam_em = float(s['x'][peak_idx])
             peak_positions.append((s['label'], lam_em, float(s['y'][peak_idx])))
-            results.append({'label': s['label'], 'analysis': f"Emission maximum ≈ {lam_em:.1f} nm (intensity {s['y'][peak_idx]:.3g})."})
+            file_notes.append((s['label'], f"emission maximum ≈ {lam_em:.1f} nm (intensity {s['y'][peak_idx]:.3g})"))
 
         if len(peak_positions) >= 2:
             lam_values = [p[1] for p in peak_positions]
             shift = max(lam_values) - min(lam_values)
             if shift > 2:
                 direction = "red-shifted" if peak_positions[-1][1] > peak_positions[0][1] else "blue-shifted"
-                results.append({'label': 'Overall', 'analysis': f"Emission maxima span {shift:.1f} nm across samples — later samples appear {direction} relative to the first, which can indicate changes in the local environment, conjugation, or aggregation state."})
+                overall = f"Emission maxima span {shift:.1f} nm across samples — later samples appear {direction} relative to the first, which can indicate changes in the local environment, conjugation, or aggregation state."
 
     elif technique_name == 'EDS/EDX':
         for s in series_list:
@@ -3105,9 +3380,9 @@ def generate_spectroscopy_analysis(technique_name, series_list):
                 text = f"{len(peaks)} peak(s) detected, {len(matched)} matched to an element. {comp_text}."
             else:
                 text = f"{len(peaks)} peak(s) detected but none matched a known characteristic X-ray line within tolerance."
-            text += (" (Peak identification only, from standard reference line energies — not ZAF-corrected "
-                     "quantification. Treat the % as a rough relative-abundance guide, not certified composition.)")
-            results.append({'label': s['label'], 'analysis': text})
+            file_notes.append((s['label'], text))
+        overall = ("Peak identification only, from standard reference line energies — not ZAF-corrected "
+                   "quantification. Treat the % as a rough relative-abundance guide, not certified composition.")
 
     elif technique_name == 'MALDI':
         for s in series_list:
@@ -3127,8 +3402,8 @@ def generate_spectroscopy_analysis(technique_name, series_list):
                         f"Mn ≈ {mn:.1f} Da, Mw ≈ {mw:.1f} Da, PDI (Mw/Mn) ≈ {pdi:.3f} — a {spread} mass distribution.")
             else:
                 text = f"{len(masses)} peak(s) detected — need at least 3 resolved peaks to estimate Mn/Mw/PDI."
-            text += " (Treats MALDI peak intensities as relative population counts — a common approximation, though MALDI ionization efficiency isn't perfectly uniform across mass, so this skews toward better-ionizing species.)"
-            results.append({'label': s['label'], 'analysis': text})
+            file_notes.append((s['label'], text))
+        overall = "Treats MALDI peak intensities as relative population counts — a common approximation, though MALDI ionization efficiency isn't perfectly uniform across mass, so this skews toward better-ionizing species."
 
     elif technique_name == 'HPLC / GC':
         for s in series_list:
@@ -3142,10 +3417,101 @@ def generate_spectroscopy_analysis(technique_name, series_list):
                 text = f"{len(peaks)} peak(s) integrated, total area {total_area:.4g}. Largest: {top_text}.{plates_text}"
             else:
                 text = "No peaks detected at the current sensitivity — check Peak Picking settings."
-            text += " (See Peak Integration for the full per-peak table, including resolution and tailing factor.)"
-            results.append({'label': s['label'], 'analysis': text})
+            file_notes.append((s['label'], text))
+        overall = "See Peak Integration for the full per-peak table, including resolution and tailing factor."
 
-    return results
+    elif technique_name == 'LC-MS':
+        for s in series_list:
+            peaks = integrate_chromatogram_peaks(s['x'], s['y'], prominence=(max(s['y']) - min(s['y'])) * 0.05 or None)
+            if peaks:
+                total_area = sum(p['area'] for p in peaks)
+                top = sorted(peaks, key=lambda p: p['area'], reverse=True)[:3]
+                top_text = "; ".join(f"{p['rt']:.2f} min ({p['pct_area']}% area)" for p in top)
+                text = f"{len(peaks)} peak(s) integrated, total area {total_area:.4g}. Largest: {top_text}."
+            else:
+                text = "No peaks detected at the current sensitivity — check Peak Picking settings."
+            file_notes.append((s['label'], text))
+        overall = "Retention-time peaks only — for mass-based compound identification from these peaks, use Formula ID."
+
+    elif technique_name == 'Cyclic Voltammetry (CV)':
+        for s in series_list:
+            m = compute_cv_metrics(s['x'], s['y'])
+            text = (f"Ipa ≈ {m['ipa']:.4g} at Epa ≈ {m['epa']:.4g}; Ipc ≈ {m['ipc']:.4g} at Epc ≈ {m['epc']:.4g}. "
+                    f"ΔEp ≈ {m['delta_ep']*1000:.1f} mV, E1/2 ≈ {m['e_half']:.4g}.")
+            if m['ratio'] is not None:
+                text += f" Ipa/Ipc ≈ {m['ratio']:.2f}."
+            file_notes.append((s['label'], text))
+        if len(series_list) >= 2:
+            overall = build_electrochemical_analysis(series_list)
+
+    elif technique_name == 'UTM / Nanoindentation':
+        for s in series_list:
+            x, y = s['x'], s['y']
+            n = len(x)
+            n_lin = max(5, int(n * 0.15))
+            parts = []
+            try:
+                slope, _ = np.polyfit(x[:n_lin], y[:n_lin], 1)
+                parts.append(f"elastic modulus (slope of the initial ~{100 * n_lin / n:.0f}% of the curve, assumed linear-elastic) ≈ {slope:.4g}")
+            except Exception:
+                pass
+            uts_idx = int(np.argmax(y))
+            uts, uts_x = float(y[uts_idx]), float(x[uts_idx])
+            parts.append(f"peak stress (UTS) ≈ {uts:.4g} at strain ≈ {uts_x:.4g}")
+            if uts_idx < n - 1:
+                drop = uts - float(y[-1])
+                parts.append(f"stress falls by {drop:.4g} after the peak (to {float(y[-1]):.4g} at the final recorded point), consistent with necking or fracture beyond the UTS")
+            else:
+                parts.append("no post-peak softening visible in the recorded range — may be cut off before fracture")
+            try:
+                toughness = float(np.trapezoid(y, x))
+                parts.append(f"toughness (area under the curve) ≈ {toughness:.4g}")
+            except Exception:
+                pass
+            file_notes.append((s['label'], "; ".join(parts) + "."))
+
+    elif technique_name == 'Rheometer':
+        for s in series_list:
+            x, y = s['x'], s['y']
+            mask = (x > 0) & (y > 0)
+            if mask.sum() >= 3:
+                log_x, log_y = np.log10(x[mask]), np.log10(y[mask])
+                slope, intercept = np.polyfit(log_x, log_y, 1)
+                n_flow = slope + 1
+                k = 10 ** intercept
+                if n_flow < 0.9:
+                    behavior = f"shear-thinning (pseudoplastic, n ≈ {n_flow:.2f})"
+                elif n_flow > 1.1:
+                    behavior = f"shear-thickening (dilatant, n ≈ {n_flow:.2f})"
+                else:
+                    behavior = f"approximately Newtonian (n ≈ {n_flow:.2f})"
+                text = f"power-law fit: K ≈ {k:.4g}, n ≈ {n_flow:.2f} — {behavior}."
+            else:
+                text = "not enough positive-valued points to fit a power-law flow curve."
+            file_notes.append((s['label'], text))
+        overall = "Assumes X = shear rate, Y = viscosity, the most common single flow-curve setup — if this is actually a frequency sweep of storage/loss modulus, this power-law fit isn't meaningful."
+
+    elif technique_name == 'XPS':
+        for s in series_list:
+            x, y = s['x'], s['y']
+            bg = shirley_background(x, y)
+            y_sub = np.clip(y - bg, 0, None)
+            components, _fitted = fit_multi_gaussian_peaks(x, y_sub, n_peaks=3)
+            if not components:
+                file_notes.append((s['label'], "peak fit did not converge — try Peak Fitting directly with fewer components."))
+                continue
+            lines = []
+            for c in components:
+                assigned = next((desc for lo, hi, desc in XPS_TABLE if lo <= c['center'] <= hi), None)
+                line = f"{c['center']:.1f} eV ({c['pct_area']}% area, FWHM {c['fwhm']:.2f} eV)"
+                line += f" → {assigned}" if assigned else " → unassigned"
+                lines.append(line)
+            file_notes.append((s['label'], f"Shirley-background peak fit (3 components): " + "; ".join(lines) + "."))
+        overall = ("Chemical-state assignments come from a fixed binding-energy reference table and are ambiguous without "
+                   "knowing which element's core level was actually scanned — treat them as a starting hypothesis, not "
+                   "a confirmed identification. Adjust the component count directly in Peak Fitting if 3 doesn't match what's really there.")
+
+    return _integrated_analysis(file_notes, overall)
 
 
 
@@ -3211,9 +3577,36 @@ def tech_build_wide_series(state):
 
 
 
+def save_tech_plot_files(fig, prefix='tech'):
+    """Saves a rendered technique plot in every export format the Plot tab offers a
+    download link for, and returns the PNG's filename (the others are derived from it
+    by extension in the template)."""
+    base = f"{prefix}_{int(datetime.now().timestamp() * 1000)}"
+    plot_filename = f"{base}.png"
+    fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], plot_filename), dpi=130)
+    fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], f"{base}.svg"))
+    fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], f"{base}.pdf"))
+    fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], f"{base}.tiff"), dpi=300)
+    return plot_filename
+
+
+# Plot types offered for every technique in addition to whatever technique-specific modes
+# TECHNIQUE_PLOT_MODES lists (line_spectrum/calibration_scatter/contour_2d etc.) — generic
+# ways to look at the same selected series that aren't tied to any one measurement type.
+GENERIC_PLOT_MODES = [
+    ('scatter', 'Scatter Plot'),
+    ('histogram', 'Histogram (distribution of Y values)'),
+    ('bar', 'Bar Chart (mean ± std per file)'),
+    ('heatmap', 'Heatmap (all files stacked, color = Y)'),
+]
+
+
 def tech_render_spectrum_plot(state, mark_peaks=False):
-    """Renders a technique's plot — line spectrum, calibration scatter+fit, or an honest
-    placeholder for 2D contour data (not supported by our flat X/Y column model)."""
+    """Renders a technique's plot. Most plot_type values are per-series (line/scatter/
+    histogram, drawn either overlaid or as one subplot per file); calibration_scatter adds
+    a linear fit; bar and heatmap summarize all files on a single shared axes instead (a
+    per-file panel wouldn't make sense for either); contour_2d is an honest placeholder for
+    2D data (not supported by our flat X/Y column model)."""
     plot_type = state.get('plot_type', 'line_spectrum')
 
     if plot_type == 'contour_2d':
@@ -3222,8 +3615,7 @@ def tech_render_spectrum_plot(state, mark_peaks=False):
                 ha='center', va='center', fontsize=11, color='#888', transform=ax.transAxes, wrap=True)
         ax.axis('off')
         fig.tight_layout()
-        plot_filename = f"tech_{int(datetime.now().timestamp())}.png"
-        fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], plot_filename), dpi=130)
+        plot_filename = save_tech_plot_files(fig)
         plt.close(fig)
         return plot_filename, [], [], {}
 
@@ -3238,6 +3630,52 @@ def tech_render_spectrum_plot(state, mark_peaks=False):
 
     fmt = state['format']
 
+    if plot_type == 'heatmap':
+        results = [{'label': s['label'], 'stats': compute_series_stats(s['y']),
+                    'analysis': build_stats_analysis(s['label'], compute_series_stats(s['y']), plot_type)} for s in series_list]
+        if len(series_list) < 2:
+            fig, ax = plt.subplots(figsize=(8, 4))
+            ax.text(0.5, 0.5, "Heatmap needs 2 or more selected files.", ha='center', va='center', color='#888', transform=ax.transAxes)
+            ax.axis('off')
+        else:
+            x_lo = min(float(s['x'].min()) for s in series_list)
+            x_hi = max(float(s['x'].max()) for s in series_list)
+            grid = np.linspace(x_lo, x_hi, 300)
+            matrix = np.array([np.interp(grid, s['x'], s['y']) for s in series_list])
+            fig, ax = plt.subplots(figsize=(8, max(3, 0.4 * len(series_list) + 2)))
+            cmap_name = fmt.get('colormap', 'default')
+            im = ax.imshow(matrix, aspect='auto', cmap=cmap_name if cmap_name != 'default' else 'viridis',
+                            extent=[grid[0], grid[-1], len(series_list), 0])
+            ax.set_yticks(np.arange(len(series_list)) + 0.5)
+            ax.set_yticklabels([s['label'] for s in series_list], fontsize=8)
+            ax.set_xlabel(fmt.get('x_label') or 'X', fontsize=fmt['label_size'])
+            fig.colorbar(im, ax=ax, label=fmt.get('y_label') or 'Y')
+        fig.tight_layout()
+        plot_filename = save_tech_plot_files(fig)
+        plt.close(fig)
+        return plot_filename, results, errors, {}
+
+    if plot_type == 'bar':
+        fig, ax = plt.subplots(figsize=(max(6, 1.2 * len(series_list)), 5.5))
+        colors = get_series_colors(fmt.get('colormap', 'default'), len(series_list))
+        means = [float(np.mean(s['y'])) for s in series_list]
+        stds = [float(np.std(s['y'])) for s in series_list]
+        ax.bar(range(len(series_list)), means, yerr=stds, color=colors, capsize=4)
+        ax.set_xticks(range(len(series_list)))
+        ax.set_xticklabels([s['label'] for s in series_list], rotation=30, ha='right', fontsize=8)
+        label_weight = 'bold' if fmt.get('bold_labels') else 'normal'
+        ax.set_xlabel(fmt.get('x_label') or 'X', fontsize=fmt['label_size'], fontweight=label_weight)
+        ax.set_ylabel(fmt.get('y_label') or 'Y', fontsize=fmt['label_size'], fontweight=label_weight)
+        ax.tick_params(width=fmt['tick_width'])
+        if fmt.get('grid', True):
+            ax.grid(alpha=0.25, axis='y')
+        results = [{'label': s['label'], 'stats': compute_series_stats(s['y']),
+                    'analysis': build_stats_analysis(s['label'], compute_series_stats(s['y']), plot_type)} for s in series_list]
+        fig.tight_layout()
+        plot_filename = save_tech_plot_files(fig)
+        plt.close(fig)
+        return plot_filename, results, errors, {}
+
     if state.get('wide_mode') and len(numeric_color_values) == len(series_list) and len(series_list) > 8:
         # many series with numeric labels (e.g. emission wavelengths) — a standard legend would be
         # unreadable, so color by the series' own value using a continuous colormap with a colorbar instead
@@ -3250,17 +3688,34 @@ def tech_render_spectrum_plot(state, mark_peaks=False):
         colors = get_series_colors(fmt.get('colormap', 'default'), len(series_list))
         use_colorbar = False
 
-    fig, ax = plt.subplots(figsize=(8, 5.5))
+    n = len(series_list)
+    # Small multiples instead of one overlay axes — one panel per file, titled with its
+    # label instead of a shared legend. Not offered for the colorbar case (already a
+    # many-series continuous-color view, not a good fit for per-file panels).
+    use_subplots = state.get('layout') == 'subplots' and n > 1 and not use_colorbar
+    if use_subplots:
+        ncols = min(3, n)
+        nrows = -(-n // ncols)  # ceil division
+        fig, axes = plt.subplots(nrows, ncols, figsize=(4.3 * ncols, 3.3 * nrows), squeeze=False)
+        axes_flat = list(axes.flatten())
+        for extra_ax in axes_flat[n:]:
+            extra_ax.axis('off')  # unused grid cells when n doesn't fill the grid evenly
+        target_axes = axes_flat[:n]
+    else:
+        fig, ax = plt.subplots(figsize=(8, 5.5))
+        target_axes = [ax] * n
+
     results = []
     peaks_by_label = {}
 
     if plot_type == 'calibration_scatter':
         for i, s in enumerate(series_list):
-            ax.scatter(s['x'], s['y'], s=fmt['marker_size'], color=colors[i], alpha=0.8, label=s['label'])
+            tax = target_axes[i]
+            tax.scatter(s['x'], s['y'], s=fmt['marker_size'], color=colors[i], alpha=0.8, label=s['label'])
             try:
                 popt, _ = curve_fit(linear_fn, s['x'], s['y'])
                 x_smooth = np.linspace(min(s['x']), max(s['x']), 200)
-                ax.plot(x_smooth, linear_fn(x_smooth, *popt), color=colors[i], linestyle='--', linewidth=fmt['line_width'])
+                tax.plot(x_smooth, linear_fn(x_smooth, *popt), color=colors[i], linestyle='--', linewidth=fmt['line_width'])
                 y_pred = linear_fn(s['x'], *popt)
                 ss_res = np.sum((s['y'] - y_pred) ** 2)
                 ss_tot = np.sum((s['y'] - np.mean(s['y'])) ** 2)
@@ -3268,8 +3723,26 @@ def tech_render_spectrum_plot(state, mark_peaks=False):
                 analysis = f"Linear fit: y = {popt[0]:.4g}x + {popt[1]:.4g}, R² = {r_squared:.4f}." if r_squared is not None else "Linear fit could not be scored."
             except Exception:
                 analysis = "Linear fit did not converge for this series."
+            if use_subplots:
+                tax.set_title(s['label'], fontsize=9)
             stats = compute_series_stats(s['y'])
             results.append({'label': s['label'], 'stats': stats, 'analysis': analysis})
+    elif plot_type == 'scatter':
+        for i, s in enumerate(series_list):
+            tax = target_axes[i]
+            tax.scatter(s['x'], s['y'], s=fmt['marker_size'], color=colors[i], alpha=0.8, label=s['label'])
+            if use_subplots:
+                tax.set_title(s['label'], fontsize=9)
+            stats = compute_series_stats(s['y'])
+            results.append({'label': s['label'], 'stats': stats, 'analysis': build_stats_analysis(s['label'], stats, plot_type)})
+    elif plot_type == 'histogram':
+        for i, s in enumerate(series_list):
+            tax = target_axes[i]
+            tax.hist(s['y'], bins=min(30, max(5, len(s['y']) // 3)), color=colors[i], alpha=0.65 if not use_subplots else 0.9, edgecolor='white', label=s['label'])
+            if use_subplots:
+                tax.set_title(s['label'], fontsize=9)
+            stats = compute_series_stats(s['y'])
+            results.append({'label': s['label'], 'stats': stats, 'analysis': build_stats_analysis(s['label'], stats, plot_type)})
     else:  # line_spectrum (default)
         smoothing = state.get('smoothing', {})
         if smoothing.get('enabled'):
@@ -3284,11 +3757,16 @@ def tech_render_spectrum_plot(state, mark_peaks=False):
 
         peaks_by_label = tech_detect_peaks(series_list, state['peaks'].get('prominence'), state['peaks'].get('min_height')) if mark_peaks else {}
         for i, s in enumerate(series_list):
-            ax.plot(s['x'], s['y'], color=colors[i], linewidth=fmt['line_width'], label=s['label'])
+            tax = target_axes[i]
+            tax.plot(s['x'], s['y'], color=colors[i], linewidth=fmt['line_width'], label=s['label'])
+            if fmt.get('fill_under'):
+                tax.fill_between(s['x'], 0, s['y'], color=colors[i], alpha=0.25, zorder=0)
             if mark_peaks and peaks_by_label.get(s['label']):
                 px = [p[0] for p in peaks_by_label[s['label']]]
                 py = [p[1] for p in peaks_by_label[s['label']]]
-                ax.scatter(px, py, color=colors[i], marker='v', s=60, edgecolor='black', zorder=5)
+                tax.scatter(px, py, color=colors[i], marker='v', s=60, edgecolor='black', zorder=5)
+            if use_subplots:
+                tax.set_title(s['label'], fontsize=9)
             stats = compute_series_stats(s['y'])
             n_peaks = len(peaks_by_label.get(s['label'], []))
             note = f"{n_peaks} peak(s) detected." if mark_peaks else None
@@ -3298,46 +3776,183 @@ def tech_render_spectrum_plot(state, mark_peaks=False):
             results.append({'label': s['label'], 'stats': stats, 'analysis': analysis})
 
     label_weight = 'bold' if fmt.get('bold_labels') else 'normal'
-    ax.set_xlabel('X', fontsize=fmt['label_size'], fontweight=label_weight)
-    ax.set_ylabel('Y', fontsize=fmt['label_size'], fontweight=label_weight)
-    ax.tick_params(width=fmt['tick_width'])
-    if fmt.get('log_x'):
-        ax.set_xscale('log')
+    unique_axes = list(dict.fromkeys(target_axes))  # de-dupe while preserving order (overlay reuses one ax)
+    # A histogram's axes mean something different from every other plot type here: its X is
+    # the data's Y-values (binned), and its Y is a count — so the custom X/Y label text swaps
+    # sides, with a hardcoded 'Count' rather than the user's Y label.
+    x_axis_label = (fmt.get('y_label') or 'Y') if plot_type == 'histogram' else (fmt.get('x_label') or 'X')
+    y_axis_label = 'Count' if plot_type == 'histogram' else (fmt.get('y_label') or 'Y')
+    for a in unique_axes:
+        a.set_xlabel(x_axis_label, fontsize=fmt['label_size'], fontweight=label_weight)
+        a.set_ylabel(y_axis_label, fontsize=fmt['label_size'], fontweight=label_weight)
+        a.tick_params(width=fmt['tick_width'])
+        if fmt.get('log_x'):
+            a.set_xscale('log')
+        if fmt.get('log_y'):
+            a.set_yscale('log')
+
+        # explicit axis range (zoom), applied after scale type is set
+        x_min, x_max = fmt.get('x_min'), fmt.get('x_max')
+        if x_min is not None or x_max is not None:
+            cur_min, cur_max = a.get_xlim()
+            a.set_xlim(x_min if x_min is not None else cur_min, x_max if x_max is not None else cur_max)
+
+        y_min, y_max = fmt.get('y_min'), fmt.get('y_max')
+        if y_min is not None or y_max is not None:
+            cur_min, cur_max = a.get_ylim()
+            a.set_ylim(y_min if y_min is not None else cur_min, y_max if y_max is not None else cur_max)
+
+        if fmt.get('grid', True):
+            a.grid(alpha=0.25)
+
+    if use_colorbar:
+        sm = plt.cm.ScalarMappable(cmap=plt.get_cmap('viridis'), norm=matplotlib.colors.Normalize(vmin=vmin, vmax=vmax))
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=unique_axes[0])
+        cbar.set_label('Emission wavelength' if state.get('wide_mode') else 'Series value')
+    elif fmt.get('legend', True) and not use_subplots:
+        ncol = min(len(series_list), 3) if fmt.get('legend_orientation') == 'horizontal' and len(series_list) > 3 else (len(series_list) if fmt.get('legend_orientation') == 'horizontal' else 1)
+        unique_axes[0].legend(fontsize=9 * fmt.get('legend_scale', 1.0), loc=fmt.get('legend_loc', 'best'), ncol=ncol, framealpha=0.9)
+
+    fig.tight_layout()
+    plot_filename = save_tech_plot_files(fig)
+    plt.close(fig)
+
+    return plot_filename, results, errors, peaks_by_label
+
+
+def baseline_als(y, lam=1e5, p=0.01, niter=10):
+    """Asymmetric Least Squares baseline (Eilers & Boelens, 2005) — a genuinely computed
+    smooth curve fit under the data, not a peak-detection heuristic. `lam` controls
+    smoothness (higher = stiffer baseline), `p` controls asymmetry (smaller p pulls the
+    baseline down to sit under peaks rather than through their middle). Standard method
+    for FTIR/Raman baseline removal; needs no new dependency beyond scipy.sparse."""
+    y = np.asarray(y, dtype=float)
+    L = len(y)
+    if L < 5:
+        return y.copy()
+    D = sparse.diags([1, -2, 1], [0, -1, -2], shape=(L, L - 2))
+    D = lam * (D @ D.transpose())
+    w = np.ones(L)
+    z = y.copy()
+    for _ in range(max(1, int(niter))):
+        W = sparse.spdiags(w, 0, L, L)
+        z = spsolve((W + D).tocsc(), w * y)
+        w = p * (y > z) + (1 - p) * (y <= z)
+    return z
+
+
+def render_baseline_comparison(series_list, baselines, correcteds, out_dir):
+    """One panel per file (raw / baseline / corrected overlaid) — always small multiples,
+    since overlaying several files' raw+baseline+corrected triples on one axes would be
+    unreadable clutter regardless of how many files are selected."""
+    n = len(series_list)
+    if n > 1:
+        ncols = min(3, n)
+        nrows = -(-n // ncols)
+        fig, axes = plt.subplots(nrows, ncols, figsize=(4.3 * ncols, 3.3 * nrows), squeeze=False)
+        axes_flat = list(axes.flatten())
+        for extra_ax in axes_flat[n:]:
+            extra_ax.axis('off')
+    else:
+        fig, ax = plt.subplots(figsize=(7, 5))
+        axes_flat = [ax]
+
+    for i, s in enumerate(series_list):
+        a = axes_flat[i]
+        a.plot(s['x'], s['y'], color='#999', linewidth=1.1, label='Raw')
+        a.plot(s['x'], baselines[i], color='#e53e3e', linestyle='--', linewidth=1.3, label='Baseline')
+        a.plot(s['x'], correcteds[i], color='#2b6cb0', linewidth=1.4, label='Corrected')
+        a.set_title(s['label'], fontsize=9)
+        a.set_xlabel('X')
+        a.set_ylabel('Y')
+        a.grid(alpha=0.25)
+        a.legend(fontsize=8)
+
+    fig.tight_layout()
+    filename = f"baseline_{int(datetime.now().timestamp() * 1000)}.png"
+    fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], filename), dpi=130)
+    plt.close(fig)
+    return filename
+
+
+def xps_peak_fit_params(args, saved=None):
+    """Reads n_peaks/background/file_id from the request, falling back to whatever was
+    last used in Peak Fitting (persisted in session state) rather than hardcoded defaults
+    — so visiting Format and seeing the fitted preview shows the fit actually in progress,
+    not a generic 2-peak default that doesn't match what's on the Peak Fitting tab."""
+    saved = saved or {}
+
+    def _i(name, default):
+        try:
+            return int(float(args.get(name, default)))
+        except (TypeError, ValueError):
+            return default
+
+    n_peaks = max(1, min(6, _i('n_peaks', saved.get('n_peaks', 2))))
+    background = args.get('background', saved.get('background', 'shirley'))
+    if background not in ('shirley', 'linear', 'none'):
+        background = 'shirley'
+    file_id = args.get('file_id', type=int) or saved.get('file_id')
+    return {'n_peaks': n_peaks, 'background': background, 'file_id': file_id}
+
+
+def render_xps_peak_fit(x, y, bg, components, fitted_curve, out_dir, tag='', fmt=None):
+    """This is the figure that actually goes in a paper, so it respects the same Format
+    tab (line width, colors, legend, axis labels/fonts, grid, log/range) as every other
+    plot in the app, instead of being stuck on hardcoded defaults — and exports to the
+    same PNG/SVG/PDF/TIFF set."""
+    fmt = fmt or {}
+    line_width = fmt.get('line_width', 1.6)
+    label_size = fmt.get('label_size', 11)
+    label_weight = 'bold' if fmt.get('bold_labels') else 'normal'
+    x_label = fmt.get('x_label') or 'Binding Energy (eV)'
+    y_label = fmt.get('y_label') or 'Intensity'
+    colormap = fmt.get('colormap', 'default')
+    n_series_for_color = max(len(components) if components else 0, 1)
+
+    fig, ax = plt.subplots(figsize=(8, 5.5))
+    ax.plot(x, y, color='#333', linewidth=line_width, label='Raw spectrum')
+    if bg is not None:
+        ax.plot(x, bg, color='#999', linestyle='--', linewidth=max(line_width * 0.7, 0.5), label='Background')
+    if components and fitted_curve is not None:
+        colors = get_series_colors(colormap, n_series_for_color)
+        base = bg if bg is not None else np.zeros_like(x)
+        for i, c in enumerate(components):
+            comp_curve = c['amplitude'] * np.exp(-((x - c['center']) ** 2) / (2 * c['sigma'] ** 2)) + base
+            ax.plot(x, comp_curve, color=colors[i], linewidth=line_width, label=f"Component @ {c['center']:.1f} eV")
+            ax.fill_between(x, base, comp_curve, color=colors[i], alpha=0.15)
+        ax.plot(x, fitted_curve + base, color='#e53e3e', linestyle=':', linewidth=line_width * 1.15, label='Fit sum')
+
+    ax.set_xlabel(x_label, fontsize=label_size, fontweight=label_weight)
+    ax.set_ylabel(y_label, fontsize=label_size, fontweight=label_weight)
+    ax.tick_params(width=fmt.get('tick_width', 1.0))
     if fmt.get('log_y'):
         ax.set_yscale('log')
+    # log_x is skipped on purpose: XPS binding energy is never plotted log-scale, and doing
+    # so would fight with the axis-invert below.
 
-    # explicit axis range (zoom), applied after scale type is set
     x_min, x_max = fmt.get('x_min'), fmt.get('x_max')
-    if x_min is not None or x_max is not None:
-        cur_min, cur_max = ax.get_xlim()
-        ax.set_xlim(x_min if x_min is not None else cur_min, x_max if x_max is not None else cur_max)
-
     y_min, y_max = fmt.get('y_min'), fmt.get('y_max')
+    if x_min is not None or x_max is not None:
+        cur_min, cur_max = min(x[0], x[-1]), max(x[0], x[-1])
+        ax.set_xlim(x_max if x_max is not None else cur_max, x_min if x_min is not None else cur_min)
+    elif x[0] < x[-1]:
+        ax.invert_xaxis()  # XPS convention: binding energy decreasing left to right
     if y_min is not None or y_max is not None:
         cur_min, cur_max = ax.get_ylim()
         ax.set_ylim(y_min if y_min is not None else cur_min, y_max if y_max is not None else cur_max)
 
     if fmt.get('grid', True):
         ax.grid(alpha=0.25)
-    if use_colorbar:
-        sm = plt.cm.ScalarMappable(cmap=plt.get_cmap('viridis'), norm=matplotlib.colors.Normalize(vmin=vmin, vmax=vmax))
-        sm.set_array([])
-        cbar = fig.colorbar(sm, ax=ax)
-        cbar.set_label('Emission wavelength' if state.get('wide_mode') else 'Series value')
-    elif fmt.get('legend', True):
-        ncol = min(len(series_list), 3) if fmt.get('legend_orientation') == 'horizontal' and len(series_list) > 3 else (len(series_list) if fmt.get('legend_orientation') == 'horizontal' else 1)
+    if fmt.get('legend', True):
+        ncol = min(3, len(ax.get_legend_handles_labels()[0])) if fmt.get('legend_orientation') == 'horizontal' else 1
         ax.legend(fontsize=9 * fmt.get('legend_scale', 1.0), loc=fmt.get('legend_loc', 'best'), ncol=ncol, framealpha=0.9)
 
     fig.tight_layout()
-    plot_base = f"tech_{int(datetime.now().timestamp())}"
-    plot_filename = f"{plot_base}.png"
-    fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], plot_filename), dpi=130)
-    fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], f"{plot_base}.svg"))
-    fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], f"{plot_base}.pdf"))
+    plot_filename = save_tech_plot_files(fig, prefix=f"xps_fit_{tag}")
     plt.close(fig)
-
-    return plot_filename, results, errors, peaks_by_label
-
+    return plot_filename
 
 
 @app.route('/characterizations/data')
@@ -3366,6 +3981,93 @@ def data_interpretation():
     )
 
 
+@app.route('/computational')
+def computational_home():
+    techniques = dict(COMPUTATIONAL_CATEGORIES)['Computational']
+    technique_slugs = {t: slugify_technique(t) for t in techniques}
+    return render_template(
+        'computational.html',
+        page_title='Computational',
+        techniques=techniques,
+        technique_slugs=technique_slugs,
+        banner_image='images/characterizations-banner.png',
+    )
+
+
+def confocal_load_gray(data_file):
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], data_file.stored_filename)
+    return np.array(Image.open(filepath).convert('L'), dtype=float)
+
+
+def confocal_preprocess_params(args):
+    steps = [s for s in args.getlist('steps') if s in confocal.PREPROCESS_STEPS]
+
+    def _f(name, default):
+        try:
+            return float(args.get(name, default))
+        except (TypeError, ValueError):
+            return default
+
+    def _i(name, default):
+        try:
+            return int(float(args.get(name, default)))
+        except (TypeError, ValueError):
+            return default
+
+    denoise_method = args.get('denoise_method', 'gaussian')
+    if denoise_method not in confocal.DENOISE_METHODS:
+        denoise_method = 'gaussian'
+
+    params = {
+        'bg_radius': _f('bg_radius', 25),
+        'flatfield_sigma': _f('flatfield_sigma', 50),
+        'denoise_method': denoise_method,
+        'denoise_amount': _f('denoise_amount', 1.0),
+        'psf_sigma': _f('psf_sigma', 2.0),
+        'deconv_iterations': _i('deconv_iterations', 15),
+    }
+    return steps, params
+
+
+def confocal_segment_params(args):
+    def _f(name, default):
+        try:
+            return float(args.get(name, default))
+        except (TypeError, ValueError):
+            return default
+
+    def _i(name, default):
+        try:
+            return int(float(args.get(name, default)))
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        'min_distance': _i('min_distance', 10),
+        'threshold_offset': _f('threshold_offset', 0.0),
+    }
+
+
+def tech_baseline_params(args):
+    def _f(name, default):
+        try:
+            return float(args.get(name, default))
+        except (TypeError, ValueError):
+            return default
+
+    def _i(name, default):
+        try:
+            return int(float(args.get(name, default)))
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        'lam': _f('lam', 100000.0),
+        'p': _f('p', 0.01),
+        'niter': _i('niter', 10),
+    }
+
+
 @app.route('/characterizations/data/technique/<slug>')
 def technique_workspace(slug):
     technique_name = TECHNIQUE_SLUGS.get(slug)
@@ -3377,22 +4079,51 @@ def technique_workspace(slug):
     if active_tab not in tabs:
         active_tab = tabs[0]
 
-    parent_category = next((cat for cat, techs in TECHNIQUE_CATEGORIES if technique_name in techs), None)
+    parent_category = next((cat for cat, techs in ALL_TECHNIQUE_CATEGORIES if technique_name in techs), None)
+
+    if parent_category == 'Computational':
+        comp_key = f'comp_state_{slug}'
+        comp_state = session.get(comp_key, {})
+        return render_template(
+            'technique_workspace_computational.html',
+            page_title=technique_name,
+            technique_name=technique_name,
+            slug=slug,
+            tabs=tabs,
+            active_tab=active_tab,
+            parent_category=parent_category,
+            mc_integrals=computational.MC_INTEGRALS,
+            dft_basis_options=computational.DFT_BASIS_OPTIONS,
+            dft_functional_options=computational.DFT_FUNCTIONAL_OPTIONS,
+            result=comp_state.get(active_tab),
+            comp_error=session.pop('comp_error', None),
+            banner_image='images/characterizations-banner.png',
+        )
 
     # Spectroscopy techniques get the fully wired workflow; others still show the placeholder for now.
     # EDS/EDX is grouped under Microscopy & Imaging (it's acquired alongside SEM/TEM imaging) but is
     # itself a spectrum (counts vs energy), and LC-MS/MALDI/HPLC-GC are grouped under Mass & Separation
     # but their base spectrum/chromatogram view is also just a spectrum-shaped X/Y plot — all of them
     # reuse this same pipeline, then layer their own extra tabs on top.
-    if parent_category == 'Spectroscopy' or technique_name in ('EDS/EDX', 'LC-MS', 'MALDI', 'HPLC / GC'):
+    if parent_category in ('Spectroscopy', 'Mechanics & Electrochemistry') or technique_name in ('EDS/EDX', 'LC-MS', 'MALDI', 'HPLC / GC', 'XPS'):
         state = tech_get_state(slug)
         all_files = DataFile.query.filter_by(file_type='tabular', technique_name=technique_name, user_id=session['user_id']).order_by(DataFile.uploaded_at.desc()).all()
         selected_files = [f for f in all_files if f.id in state['file_ids']]
-        plot_modes = TECHNIQUE_PLOT_MODES.get(slug, [('line_spectrum', 'Line Graph')])
+        plot_modes = TECHNIQUE_PLOT_MODES.get(slug, [('line_spectrum', 'Line Graph')]) + GENERIC_PLOT_MODES
         plot_tab_name = spectrum_plot_tab_name(technique_name)
 
+        # XPS is the one technique with two genuinely different plots (the raw spectrum vs
+        # the fitted-components figure) — each gets its own independent Format settings,
+        # picked via ?target=. Every other technique only ever has the one plot.
+        format_target = request.args.get('target', 'plot') if technique_name == 'XPS' else 'plot'
+        if format_target == 'xps_fit':
+            display_format = state.get('xps_fit_format') or default_tech_format()
+        else:
+            format_target = 'plot'
+            display_format = state['format']
+
         plot_filename, results, plot_errors, peaks_by_label = (None, [], [], {})
-        if active_tab in (plot_tab_name, 'Peak Picking', 'PMF', 'Peak Integration', 'Format', 'Analysis') and state['file_ids']:
+        if active_tab in (plot_tab_name, 'Peak Picking', 'PMF', 'Peak Integration', 'Baseline Correction', 'Derivative', 'Peak Fitting', 'Format', 'Analysis') and state['file_ids']:
             mark_peaks = (active_tab in ('Peak Picking', 'PMF', 'Peak Integration', 'Analysis'))
             plot_filename, results, plot_errors, peaks_by_label = tech_render_spectrum_plot(state, mark_peaks=mark_peaks)
 
@@ -3403,6 +4134,52 @@ def technique_workspace(slug):
             else:
                 analysis_series, _ = dp_build_series(state)
             spectroscopy_analysis = generate_spectroscopy_analysis(technique_name, analysis_series)
+
+        baseline_result = None
+        if active_tab == 'Baseline Correction' and state['file_ids']:
+            baseline_params = tech_baseline_params(request.args)
+            baseline_series, baseline_errors = dp_build_series(state)
+            if baseline_series:
+                baselines = [baseline_als(s['y'], **baseline_params) for s in baseline_series]
+                correcteds = [s['y'] - b for s, b in zip(baseline_series, baselines)]
+                plot_filename_baseline = render_baseline_comparison(baseline_series, baselines, correcteds, app.config['UPLOAD_FOLDER'])
+                baseline_result = {
+                    'params': baseline_params, 'plot_filename': plot_filename_baseline,
+                    'errors': baseline_errors, 'n_files': len(baseline_series),
+                }
+            else:
+                baseline_result = {'params': baseline_params, 'plot_filename': None, 'errors': baseline_errors, 'n_files': 0}
+
+        peak_fit_result = None
+        if technique_name == 'XPS' and active_tab in ('Peak Fitting', 'Format') and state['file_ids']:
+            pf_params = xps_peak_fit_params(request.args, saved=state.get('xps_peak_fit'))
+            pf_series, pf_errors = dp_build_series(state)
+            if pf_series:
+                target = next((s for s in pf_series if s['file_id'] == pf_params['file_id']), pf_series[0])
+                pf_params['file_id'] = target['file_id']
+                x, y = target['x'], target['y']
+                if pf_params['background'] == 'shirley':
+                    bg = shirley_background(x, y)
+                elif pf_params['background'] == 'linear':
+                    bg = np.linspace(y[0], y[-1], len(y))
+                else:
+                    bg = np.zeros_like(y)
+                y_sub = np.clip(y - bg, 0, None)
+                components, fitted_curve = fit_multi_gaussian_peaks(x, y_sub, pf_params['n_peaks'])
+                xps_fit_fmt = state.get('xps_fit_format') or default_tech_format()
+                plot_filename_pf = render_xps_peak_fit(x, y, bg, components, fitted_curve, app.config['UPLOAD_FOLDER'], tag=str(target['file_id']), fmt=xps_fit_fmt)
+                peak_fit_result = {
+                    'params': pf_params, 'target_file_id': target['file_id'], 'target_label': target['label'],
+                    'components': components, 'plot_filename': plot_filename_pf,
+                    'series_options': [(s['file_id'], s['label']) for s in pf_series], 'errors': pf_errors,
+                }
+                # Peak Fitting is the tab with the controls — only it should overwrite what
+                # Format then just reads back, so tweaking Format never silently changes the fit.
+                if active_tab == 'Peak Fitting':
+                    state['xps_peak_fit'] = pf_params
+                    tech_save_state(slug, state)
+            else:
+                peak_fit_result = {'params': pf_params, 'components': None, 'plot_filename': None, 'series_options': [], 'errors': pf_errors}
 
         formula_id = None
         if technique_name == 'LC-MS' and active_tab == 'Formula ID':
@@ -3425,6 +4202,10 @@ def technique_workspace(slug):
             }
 
         quant_result = state.get('quant_result') if technique_name in ('LC-MS', 'HPLC / GC') else None
+
+        quant_file_options = []
+        if technique_name in ('LC-MS', 'HPLC / GC') and active_tab == 'Quantification' and state['file_ids']:
+            quant_file_options = build_quant_file_options(state)
 
         pmf_result = None
         if technique_name == 'MALDI' and active_tab == 'PMF':
@@ -3509,8 +4290,13 @@ def technique_workspace(slug):
             plot_errors=plot_errors,
             peaks_by_label=peaks_by_label,
             spectroscopy_analysis=spectroscopy_analysis,
+            baseline_result=baseline_result,
+            peak_fit_result=peak_fit_result,
+            format_target=format_target,
+            display_format=display_format,
             formula_id=formula_id,
             quant_result=quant_result,
+            quant_file_options=quant_file_options,
             pmf_result=pmf_result,
             imaging_result=imaging_result,
             integration_result=integration_result,
@@ -3608,6 +4394,17 @@ def technique_workspace(slug):
         state = tech_get_state(slug)
         all_images = DataFile.query.filter_by(file_type='image', technique_name='TEM', user_id=session['user_id']).order_by(DataFile.uploaded_at.desc()).all()
         selected_images = [f for f in all_images if f.id in state['file_ids']]
+        images_by_id = {f.id: f for f in selected_images}
+
+        segment_result = None
+        if active_tab == 'Segment' and selected_images:
+            image_id = request.args.get('image_id', type=int)
+            target = images_by_id.get(image_id) or selected_images[0]
+            seg_params = confocal_segment_params(request.args)
+            gray = confocal_load_gray(target)
+            labels_image, mask, objects = confocal.segment_watershed(gray, **seg_params)
+            plot_filename = confocal.render_segmentation_overlay(gray, labels_image, app.config['UPLOAD_FOLDER'], tag=str(target.id))
+            segment_result = {'target': target, 'params': seg_params, 'objects': objects, 'plot_filename': plot_filename}
 
         defect_results = []
         if active_tab == 'Defects' and selected_images:
@@ -3618,6 +4415,7 @@ def technique_workspace(slug):
                 defect_results.append({'annotation': a, 'file': files_by_id.get(a.file_id)})
 
         tem_analyses = []
+        combined_particle_analyses = []
         if active_tab == 'Analysis' and selected_images:
             image_ids = [f.id for f in selected_images]
             analyses = ImageAnalysis.query.filter(ImageAnalysis.file_id.in_(image_ids)).order_by(ImageAnalysis.created_at.desc()).all()
@@ -3625,6 +4423,7 @@ def technique_workspace(slug):
             for a in analyses:
                 extra_images = json.loads(a.extra_images_json) if a.extra_images_json else []
                 tem_analyses.append({'analysis': a, 'file': files_by_id.get(a.file_id), 'extra_images': extra_images})
+            combined_particle_analyses = combine_particle_analyses(tem_analyses)
 
         return render_template(
             'technique_workspace_tem.html',
@@ -3637,10 +4436,91 @@ def technique_workspace(slug):
             state=state,
             all_images=all_images,
             selected_images=selected_images,
+            segment_result=segment_result,
             defect_types=DEFECT_TYPES,
             defect_results=defect_results,
             tem_analyses=tem_analyses,
+            combined_particle_analyses=combined_particle_analyses,
             tem_error=session.pop('tem_error', None),
+            banner_image='images/characterizations-banner.png',
+        )
+
+    if technique_name == 'Confocal / Fluorescence':
+        state = tech_get_state(slug)
+        all_images = DataFile.query.filter_by(file_type='image', technique_name=technique_name, user_id=session['user_id']).order_by(DataFile.uploaded_at.desc()).all()
+        selected_images = [f for f in all_images if f.id in state['file_ids']]
+        images_by_id = {f.id: f for f in selected_images}
+
+        preprocess_result = None
+        if active_tab == 'Preprocess' and selected_images:
+            image_id = request.args.get('image_id', type=int)
+            target = images_by_id.get(image_id) or selected_images[0]
+            steps, params = confocal_preprocess_params(request.args)
+            gray = confocal_load_gray(target)
+            if steps:
+                processed, log = confocal.run_preprocess(gray, steps, params)
+            else:
+                processed, log = gray, []
+            plot_filename = confocal.render_preprocess_comparison(gray, processed, app.config['UPLOAD_FOLDER'], tag=str(target.id))
+            preprocess_result = {'target': target, 'steps': steps, 'params': params, 'log': log, 'plot_filename': plot_filename}
+
+        align_result = None
+        align_error = None
+        if active_tab == 'Preprocess' and len(selected_images) >= 2 and request.args.get('do_align'):
+            reference = images_by_id.get(request.args.get('reference_id', type=int)) or selected_images[0]
+            moving = images_by_id.get(request.args.get('moving_id', type=int)) or selected_images[1]
+            if reference.id == moving.id:
+                align_error = "Pick two different images to align one against the other."
+            else:
+                ref_gray = confocal_load_gray(reference)
+                mov_gray = confocal_load_gray(moving)
+                aligned, shift_yx, err = confocal.align_channels(ref_gray, mov_gray)
+                plot_filename = confocal.render_alignment_comparison(
+                    ref_gray, mov_gray, aligned, shift_yx, app.config['UPLOAD_FOLDER'], tag=f'{reference.id}-{moving.id}')
+                align_result = {
+                    'reference': reference, 'moving': moving, 'shift': shift_yx, 'error': err,
+                    'plot_filename': plot_filename, 'aligned_array': aligned,
+                }
+
+        segment_result = None
+        if active_tab == 'Segment' and selected_images:
+            image_id = request.args.get('image_id', type=int)
+            target = images_by_id.get(image_id) or selected_images[0]
+            seg_params = confocal_segment_params(request.args)
+            gray = confocal_load_gray(target)
+            labels_image, mask, objects = confocal.segment_watershed(gray, **seg_params)
+            plot_filename = confocal.render_segmentation_overlay(gray, labels_image, app.config['UPLOAD_FOLDER'], tag=str(target.id))
+            segment_result = {'target': target, 'params': seg_params, 'objects': objects, 'plot_filename': plot_filename}
+
+        particle_analyses = []
+        combined_particle_analyses = []
+        if active_tab == 'Analysis' and selected_images:
+            image_ids = [f.id for f in selected_images]
+            analyses = ImageAnalysis.query.filter(ImageAnalysis.file_id.in_(image_ids)).order_by(ImageAnalysis.created_at.desc()).all()
+            files_by_id = {f.id: f for f in selected_images}
+            for a in analyses:
+                particle_analyses.append({'analysis': a, 'file': files_by_id.get(a.file_id)})
+            combined_particle_analyses = combine_particle_analyses(particle_analyses)
+
+        return render_template(
+            'technique_workspace_confocal.html',
+            page_title=technique_name,
+            technique_name=technique_name,
+            slug=slug,
+            tabs=tabs,
+            active_tab=active_tab,
+            parent_category=parent_category,
+            state=state,
+            all_images=all_images,
+            selected_images=selected_images,
+            preprocess_result=preprocess_result,
+            align_result=align_result,
+            align_error=align_error,
+            segment_result=segment_result,
+            particle_analyses=particle_analyses,
+            combined_particle_analyses=combined_particle_analyses,
+            preprocess_steps=confocal.PREPROCESS_STEPS,
+            denoise_methods=confocal.DENOISE_METHODS,
             banner_image='images/characterizations-banner.png',
         )
 
@@ -3672,12 +4552,14 @@ def technique_workspace(slug):
 
         # for the Analysis tab: pull in any particle measurements already done on the selected images
         particle_analyses = []
+        combined_particle_analyses = []
         if active_tab == 'Analysis' and selected_images:
             image_ids = [f.id for f in selected_images]
             analyses = ImageAnalysis.query.filter(ImageAnalysis.file_id.in_(image_ids)).order_by(ImageAnalysis.created_at.desc()).all()
             files_by_id = {f.id: f for f in selected_images}
             for a in analyses:
                 particle_analyses.append({'analysis': a, 'file': files_by_id.get(a.file_id)})
+            combined_particle_analyses = combine_particle_analyses(particle_analyses)
 
         return render_template(
             'technique_workspace_microscopy.html',
@@ -3693,6 +4575,7 @@ def technique_workspace(slug):
             roughness_results=roughness_results,
             porosity_results=porosity_results,
             particle_analyses=particle_analyses,
+            combined_particle_analyses=combined_particle_analyses,
             channel_type_info=CHANNEL_TYPE_INFO,
             banner_image='images/characterizations-banner.png',
         )
@@ -3709,6 +4592,115 @@ def technique_workspace(slug):
     )
 
 
+def save_confocal_derived_image(source_file, array, suffix_label, notes):
+    """Persists a processed grayscale array (Preprocess/Align output) as a new
+    DataFile, so it flows back through Select images like any uploaded file."""
+    arr = np.clip(array, 0, 255).astype(np.uint8)
+    base_name = os.path.splitext(source_file.original_filename)[0]
+    stored_filename = secure_filename(f"{datetime.now().timestamp()}_{suffix_label}_{base_name}.png")
+    Image.fromarray(arr).save(os.path.join(app.config['UPLOAD_FOLDER'], stored_filename))
+
+    new_file = DataFile(
+        user_id=session['user_id'],
+        original_filename=f"{suffix_label}_{source_file.original_filename}",
+        stored_filename=stored_filename,
+        file_type='image',
+        label=f"{source_file.label or source_file.original_filename} ({suffix_label})",
+        technique_name=source_file.technique_name,
+        pixel_size_nm=source_file.pixel_size_nm,
+        imaging_notes=notes,
+    )
+    db.session.add(new_file)
+    db.session.commit()
+    return new_file
+
+
+@app.route('/characterizations/data/confocal/<int:file_id>/preprocess/save', methods=['POST'])
+def confocal_save_preprocess(file_id):
+    data_file = get_owned_or_404(DataFile, file_id)
+    steps, params = confocal_preprocess_params(request.form)
+
+    if not steps:
+        return redirect(url_for('technique_workspace', slug='confocal-fluorescence', tab='Preprocess', image_id=file_id))
+
+    gray = confocal_load_gray(data_file)
+    processed, log = confocal.run_preprocess(gray, steps, params)
+    save_confocal_derived_image(data_file, processed, 'processed', '; '.join(log))
+
+    return redirect(url_for('technique_workspace', slug='confocal-fluorescence', tab='Select images'))
+
+
+@app.route('/characterizations/data/confocal/align/save', methods=['POST'])
+def confocal_save_alignment():
+    reference = get_owned_or_404(DataFile, request.form.get('reference_id', type=int))
+    moving = get_owned_or_404(DataFile, request.form.get('moving_id', type=int))
+
+    ref_gray = confocal_load_gray(reference)
+    mov_gray = confocal_load_gray(moving)
+    aligned, shift_yx, err = confocal.align_channels(ref_gray, mov_gray)
+    notes = f"Aligned to '{reference.label or reference.original_filename}' via phase cross-correlation: shift=({shift_yx[0]:.2f}, {shift_yx[1]:.2f})px, registration error={err:.4f}"
+    save_confocal_derived_image(moving, aligned, 'aligned', notes)
+
+    return redirect(url_for('technique_workspace', slug='confocal-fluorescence', tab='Select images'))
+
+
+@app.route('/characterizations/data/confocal/segment/save', methods=['POST'])
+def confocal_save_segmentation():
+    slug = request.form.get('slug', 'confocal-fluorescence')
+    data_file = get_owned_or_404(DataFile, request.form.get('image_id', type=int))
+    seg_params = confocal_segment_params(request.form)
+
+    gray = confocal_load_gray(data_file)
+    labels_image, mask, objects = confocal.segment_watershed(gray, **seg_params)
+
+    if not objects:
+        return redirect(url_for('technique_workspace', slug=slug, tab='Segment', image_id=data_file.id))
+
+    scale = data_file.pixel_size_nm
+    if scale:
+        sizes = [o['equiv_diameter_px'] * scale for o in objects]
+        unit = 'nm'
+    else:
+        sizes = [o['equiv_diameter_px'] for o in objects]
+        unit = 'px'
+
+    quantity_label = 'Particle diameter'
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.hist(sizes, bins=min(20, max(5, len(sizes) // 2)), color='#2b6cb0', edgecolor='white')
+    ax.axvline(np.mean(sizes), color='#e53e3e', linestyle='--', linewidth=1.5, label=f'Mean = {np.mean(sizes):.1f} {unit}')
+    ax.set_xlabel(f'{quantity_label} ({unit})')
+    ax.set_ylabel('Count')
+    ax.legend(fontsize=9)
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+
+    hist_filename = f"particle_hist_{data_file.id}_{int(datetime.now().timestamp())}.png"
+    fig.savefig(os.path.join(app.config['UPLOAD_FOLDER'], hist_filename), dpi=130)
+    plt.close(fig)
+
+    analysis_text = build_particle_size_analysis(sizes, unit, method_label='Automatic watershed detection')
+    analysis_text += (
+        f" Detected via Otsu thresholding + distance-transform watershed"
+        f" (min separation={seg_params['min_distance']}px) — mean object"
+        f" intensity across detections: {np.mean([o['mean_intensity'] for o in objects]):.1f}."
+    )
+
+    analysis = ImageAnalysis(
+        file_id=data_file.id,
+        pixel_size_nm=scale,
+        sizes_nm_json=json.dumps(sizes),
+        unit=unit,
+        histogram_filename=hist_filename,
+        analysis_text=analysis_text,
+        measurement_type='particle_size',
+        config_json=json.dumps({'method': 'watershed', 'objects': objects, 'params': seg_params}),
+    )
+    db.session.add(analysis)
+    db.session.commit()
+
+    return redirect(url_for('view_particle_analysis', analysis_id=analysis.id))
+
+
 @app.route('/characterizations/data/technique/<slug>/select-files', methods=['POST'])
 def tech_select_files(slug):
     state = tech_get_state(slug)
@@ -3718,6 +4710,10 @@ def tech_select_files(slug):
     if new_file_ids != state['file_ids']:
         for key in ('x_min', 'x_max', 'y_min', 'y_max'):
             state['format'][key] = None
+        # A previously fitted calibration's "unknowns" table is tied to the files that were
+        # selected when it ran — keeping it around after the selection changes is exactly
+        # what was overriding the Unknown-samples auto-fill with stale data every time.
+        state.pop('quant_result', None)
 
     state['file_ids'] = new_file_ids
     tech_save_state(slug, state)
@@ -3758,6 +4754,8 @@ def set_imaging_notes(file_id):
 def tech_set_plot(slug):
     state = tech_get_state(slug)
     state['plot_type'] = request.form.get('plot_type', state['plot_type'])
+    layout = request.form.get('layout', state.get('layout', 'overlay'))
+    state['layout'] = layout if layout in ('overlay', 'subplots') else 'overlay'
     state['smoothing']['enabled'] = request.form.get('smoothing_enabled') == 'on'
     window_str = request.form.get('smoothing_window', '').strip()
     polyorder_str = request.form.get('smoothing_polyorder', '').strip()
@@ -3770,6 +4768,52 @@ def tech_set_plot(slug):
     tech_save_state(slug, state)
     plot_tab_name = spectrum_plot_tab_name(TECHNIQUE_SLUGS.get(slug))
     return redirect(url_for('technique_workspace', slug=slug, tab=plot_tab_name))
+
+
+@app.route('/characterizations/data/technique/<slug>/baseline/save', methods=['POST'])
+def tech_save_baseline(slug):
+    """Applies the same ALS baseline correction shown in the preview and writes each
+    corrected series back out as its own new tabular file (X unchanged, Y = raw - baseline),
+    so the corrected spectra flow back into Select files like any upload."""
+    state = tech_get_state(slug)
+    params = tech_baseline_params(request.form)
+    series_list, _errors = dp_build_series(state)
+
+    file_ids = [s['file_id'] for s in series_list]
+    source_files = {f.id: f for f in DataFile.query.filter(DataFile.id.in_(file_ids)).all()} if file_ids else {}
+
+    for s in series_list:
+        source = source_files.get(s['file_id'])
+        if not source:
+            continue
+        baseline = baseline_als(s['y'], **params)
+        corrected = s['y'] - baseline
+
+        stored_filename = secure_filename(f"{datetime.now().timestamp()}_baseline_{source.original_filename}")
+        stored_filename = os.path.splitext(stored_filename)[0] + '.csv'
+        df_out = pd.DataFrame({s['x_col'] or 'X': s['x'], s['y_col'] or 'Y': corrected})
+        df_out.to_csv(os.path.join(app.config['UPLOAD_FOLDER'], stored_filename), index=False)
+
+        new_file = DataFile(
+            user_id=session['user_id'],
+            original_filename=f"baseline_{source.original_filename}",
+            stored_filename=stored_filename,
+            file_type='tabular',
+            label=f"{source.label or source.original_filename} (baseline corrected)",
+            technique_name=source.technique_name,
+        )
+        db.session.add(new_file)
+
+    db.session.commit()
+    return redirect(url_for('technique_workspace', slug=slug, tab='Select files'))
+
+
+@app.route('/characterizations/data/technique/<slug>/set-derivative', methods=['POST'])
+def tech_set_derivative(slug):
+    state = tech_get_state(slug)
+    state['derivative'] = request.form.get('derivative') == 'on'
+    tech_save_state(slug, state)
+    return redirect(url_for('technique_workspace', slug=slug, tab='Derivative'))
 
 
 @app.route('/characterizations/data/technique/<slug>/set-peaks', methods=['POST'])
@@ -3785,28 +4829,59 @@ def tech_set_peaks(slug):
 
 @app.route('/characterizations/data/technique/<slug>/set-format', methods=['POST'])
 def tech_set_format(slug):
+    """Each Format-tab box (Legend / Colors / Lines-ticks-labels / Axis scaling) posts here
+    on its own, identified by `section` — only that section's fields are touched, so applying
+    or resetting one box never clobbers the others. `reset=1` restores that section's defaults
+    instead of reading its fields from the form. `target` picks which plot's own format this
+    edits — 'plot' (the raw spectrum, default) or 'xps_fit' (XPS's separately-styled fitted
+    figure) — since the two show completely different content (a single trace vs several
+    fitted components) and forcing one style onto both doesn't make sense."""
     state = tech_get_state(slug)
-    fmt = state['format']
-    fmt['legend'] = request.form.get('legend') == 'on'
-    fmt['legend_loc'] = request.form.get('legend_loc', 'best')
-    fmt['legend_orientation'] = request.form.get('legend_orientation', 'vertical')
-    fmt['legend_scale'] = float(request.form.get('legend_scale', 1.0) or 1.0)
-    fmt['line_width'] = float(request.form.get('line_width', 1.6) or 1.6)
-    fmt['marker_size'] = float(request.form.get('marker_size', 18) or 18)
-    fmt['tick_width'] = float(request.form.get('tick_width', 1.0) or 1.0)
-    fmt['label_size'] = float(request.form.get('label_size', 11) or 11)
-    fmt['bold_labels'] = request.form.get('bold_labels') == 'on'
-    fmt['grid'] = request.form.get('grid') == 'on'
-    fmt['log_x'] = request.form.get('log_x') == 'on'
-    fmt['log_y'] = request.form.get('log_y') == 'on'
+    target = request.form.get('target', 'plot')
+    if target == 'xps_fit':
+        fmt = state.get('xps_fit_format') or default_tech_format()
+    else:
+        target = 'plot'
+        fmt = state['format']
+    section = request.form.get('section', 'legend')
+    reset = request.form.get('reset') == '1'
 
-    for key in ('x_min', 'x_max', 'y_min', 'y_max'):
-        val = request.form.get(key, '').strip()
-        fmt[key] = float(val) if val else None
+    if section not in DEFAULT_TECH_FORMAT_SECTIONS:
+        section = 'legend'
 
-    state['format'] = fmt
+    if reset:
+        fmt.update(DEFAULT_TECH_FORMAT_SECTIONS[section])
+    elif section == 'legend':
+        fmt['legend'] = request.form.get('legend') == 'on'
+        fmt['legend_loc'] = request.form.get('legend_loc', 'best')
+        fmt['legend_orientation'] = request.form.get('legend_orientation', 'vertical')
+        fmt['legend_scale'] = float(request.form.get('legend_scale', 1.0) or 1.0)
+    elif section == 'colors':
+        fmt['colormap'] = request.form.get('colormap', 'default')
+    elif section == 'lines':
+        fmt['line_width'] = float(request.form.get('line_width', 1.6) or 1.6)
+        fmt['marker_size'] = float(request.form.get('marker_size', 18) or 18)
+        fmt['tick_width'] = float(request.form.get('tick_width', 1.0) or 1.0)
+        fmt['grid'] = request.form.get('grid') == 'on'
+        fmt['fill_under'] = request.form.get('fill_under') == 'on'
+    elif section == 'axis_labels':
+        fmt['x_label'] = request.form.get('x_label', 'X').strip() or 'X'
+        fmt['y_label'] = request.form.get('y_label', 'Y').strip() or 'Y'
+        fmt['label_size'] = float(request.form.get('label_size', 11) or 11)
+        fmt['bold_labels'] = request.form.get('bold_labels') == 'on'
+    elif section == 'axis':
+        fmt['log_x'] = request.form.get('log_x') == 'on'
+        fmt['log_y'] = request.form.get('log_y') == 'on'
+        for key in ('x_min', 'x_max', 'y_min', 'y_max'):
+            val = request.form.get(key, '').strip()
+            fmt[key] = float(val) if val else None
+
+    if target == 'xps_fit':
+        state['xps_fit_format'] = fmt
+    else:
+        state['format'] = fmt
     tech_save_state(slug, state)
-    return redirect(url_for('technique_workspace', slug=slug, tab='Format'))
+    return redirect(url_for('technique_workspace', slug=slug, tab='Format', target=target))
 
 
 SIM_REFS = {
@@ -3840,6 +4915,105 @@ def save_simulated_file(technique_name, result):
     db.session.add(data_file)
     db.session.commit()
     return data_file
+
+
+def _comp_save_result(slug, tab_name, result):
+    comp_key = f'comp_state_{slug}'
+    state = session.get(comp_key, {})
+    state[tab_name] = result
+    session[comp_key] = state
+
+
+@app.route('/characterizations/computational/<slug>/run-ising', methods=['POST'])
+def comp_run_ising(slug):
+    if TECHNIQUE_SLUGS.get(slug) != 'Monte Carlo':
+        abort(404)
+    try:
+        L = int(request.form.get('L', 32))
+        temperature = float(request.form.get('temperature', 2.269))
+        n_sweeps = int(request.form.get('n_sweeps', 400))
+        seed_raw = request.form.get('seed', '').strip()
+        seed = int(seed_raw) if seed_raw else None
+        result = computational.run_ising_2d(
+            L=L, temperature=temperature, n_sweeps=n_sweeps, seed=seed,
+            out_dir=app.config['UPLOAD_FOLDER'], tag='u{}_'.format(session.get('user_id', 0)),
+        )
+    except Exception as e:
+        session['comp_error'] = f'Ising simulation failed: {e}'
+        return redirect(url_for('technique_workspace', slug=slug, tab='Ising Model'))
+    _comp_save_result(slug, 'Ising Model', result)
+    return redirect(url_for('technique_workspace', slug=slug, tab='Ising Model'))
+
+
+@app.route('/characterizations/computational/<slug>/run-mc-integration', methods=['POST'])
+def comp_run_mc_integration(slug):
+    if TECHNIQUE_SLUGS.get(slug) != 'Monte Carlo':
+        abort(404)
+    try:
+        target = request.form.get('target', 'circle')
+        n_samples = int(request.form.get('n_samples', 100000))
+        seed_raw = request.form.get('seed', '').strip()
+        seed = int(seed_raw) if seed_raw else None
+        result = computational.run_mc_integration(
+            target=target, n_samples=n_samples, seed=seed,
+            out_dir=app.config['UPLOAD_FOLDER'], tag='u{}_'.format(session.get('user_id', 0)),
+        )
+    except Exception as e:
+        session['comp_error'] = f'Monte Carlo integration failed: {e}'
+        return redirect(url_for('technique_workspace', slug=slug, tab='Monte Carlo Integration'))
+    _comp_save_result(slug, 'Monte Carlo Integration', result)
+    return redirect(url_for('technique_workspace', slug=slug, tab='Monte Carlo Integration'))
+
+
+@app.route('/characterizations/computational/<slug>/run-random-walk', methods=['POST'])
+def comp_run_random_walk(slug):
+    if TECHNIQUE_SLUGS.get(slug) != 'Monte Carlo':
+        abort(404)
+    try:
+        n_steps = int(request.form.get('n_steps', 2000))
+        n_walkers = int(request.form.get('n_walkers', 200))
+        dim = int(request.form.get('dim', 2))
+        step_size = float(request.form.get('step_size', 1.0))
+        seed_raw = request.form.get('seed', '').strip()
+        seed = int(seed_raw) if seed_raw else None
+        result = computational.run_random_walk(
+            n_steps=n_steps, n_walkers=n_walkers, dim=dim, step_size=step_size, seed=seed,
+            out_dir=app.config['UPLOAD_FOLDER'], tag='u{}_'.format(session.get('user_id', 0)),
+        )
+    except Exception as e:
+        session['comp_error'] = f'Random walk simulation failed: {e}'
+        return redirect(url_for('technique_workspace', slug=slug, tab='Random Walk'))
+    _comp_save_result(slug, 'Random Walk', result)
+    return redirect(url_for('technique_workspace', slug=slug, tab='Random Walk'))
+
+
+@app.route('/characterizations/computational/<slug>/run-dft', methods=['POST'])
+def comp_run_dft(slug):
+    if TECHNIQUE_SLUGS.get(slug) != 'DFT (small molecule)':
+        abort(404)
+    input_type = request.form.get('input_type', 'smiles')
+    structure_input = (request.form.get('structure') or '').strip()
+    basis = request.form.get('basis', '6-31g')
+    functional = request.form.get('functional', 'b3lyp')
+    label = (request.form.get('label') or '').strip()
+    if not structure_input:
+        session['comp_error'] = 'Give a SMILES string or XYZ coordinates first.'
+        return redirect(url_for('technique_workspace', slug=slug, tab='Run Calculation'))
+    try:
+        charge = int(request.form.get('charge', 0) or 0)
+        spin = int(request.form.get('spin', 0) or 0)
+        result = computational.run_dft(
+            structure_input, input_type=input_type, basis=basis, functional=functional,
+            charge=charge, spin=spin, label=label,
+        )
+    except computational.DFTInputError as e:
+        session['comp_error'] = str(e)
+        return redirect(url_for('technique_workspace', slug=slug, tab='Run Calculation'))
+    except Exception as e:
+        session['comp_error'] = f'DFT calculation failed: {e}'
+        return redirect(url_for('technique_workspace', slug=slug, tab='Run Calculation'))
+    _comp_save_result(slug, 'Run Calculation', result)
+    return redirect(url_for('technique_workspace', slug=slug, tab='Run Calculation'))
 
 
 @app.route('/characterizations/data/technique/<slug>/simulate', methods=['POST'])
@@ -4047,11 +5221,73 @@ def fit_calibration_and_quantify(standards, unknowns, plot_prefix):
     return result
 
 
+def render_chromatogram_with_peaks(x, y, peaks, out_dir, tag=''):
+    """The same chromatogram Plot Chromatogram/Peak Picking would show, with each detected
+    peak numbered at its apex — so choosing 'which peak' in Quantification means pointing
+    at a number you can see on the actual curve, not a blind area value in a text box."""
+    fig, ax = plt.subplots(figsize=(6.5, 3.2))
+    ax.plot(x, y, color='#2b6cb0', linewidth=1.3)
+    for i, p in enumerate(peaks, start=1):
+        apex_y = float(y[p['apex_idx']])
+        ax.scatter([p['rt']], [apex_y], color='#e53e3e', zorder=5, s=28)
+        ax.annotate(str(i), (p['rt'], apex_y), textcoords='offset points', xytext=(0, 8),
+                    fontsize=9, ha='center', color='#e53e3e', fontweight='bold')
+    ax.set_xlabel('Retention time')
+    ax.set_ylabel('Signal')
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    filename = f"quant_chrom_{tag}_{int(datetime.now().timestamp() * 1000)}.png"
+    fig.savefig(os.path.join(out_dir, filename), dpi=120)
+    plt.close(fig)
+    return filename
+
+
+def build_quant_file_options(state):
+    """Per selected file: its chromatogram (peaks numbered on the plot) and the detected
+    peaks to choose from — replaces guessing 'the largest peak' with a real choice the user
+    can see and override, plus a checkbox to leave a file out of this fit entirely."""
+    if state.get('wide_mode'):
+        series_list, _, _ = tech_build_wide_series(state)
+    else:
+        series_list, _ = dp_build_series(state)
+
+    options = []
+    for s in series_list:
+        peaks = integrate_chromatogram_peaks(s['x'], s['y'], prominence=state['peaks'].get('prominence'), min_height=state['peaks'].get('min_height'))
+        plot_filename = render_chromatogram_with_peaks(s['x'], s['y'], peaks, app.config['UPLOAD_FOLDER'], tag=str(s['file_id']))
+        default_idx = max(range(len(peaks)), key=lambda i: peaks[i]['area']) if peaks else None
+        options.append({
+            'file_id': s['file_id'], 'label': s['label'], 'peaks': peaks,
+            'plot_filename': plot_filename, 'default_idx': default_idx,
+        })
+    return options
+
+
+def unknowns_from_quant_form(state, form):
+    """Rebuilds each included file's chosen peak (by index, same numbering shown on its
+    plotted chromatogram) fresh from the submitted form — never trusts a stale area value,
+    always re-integrates from the current data and current peak-picking settings."""
+    options = build_quant_file_options(state)
+    unknowns = []
+    for opt in options:
+        fid = opt['file_id']
+        if form.get(f'include_{fid}') != 'on' or not opt['peaks']:
+            continue
+        idx_str = form.get(f'peak_{fid}', '')
+        if not idx_str.isdigit():
+            continue
+        idx = int(idx_str)
+        if idx >= len(opt['peaks']):
+            continue
+        unknowns.append((opt['label'], round(opt['peaks'][idx]['area'], 4)))
+    return unknowns
+
+
 @app.route('/characterizations/data/technique/<slug>/lcms-quantify', methods=['POST'])
 def lc_ms_quantify(slug):
     state = tech_get_state(slug)
     standards = lc_ms_parse_csv_lines(request.form.get('standards', ''), second_col_numeric_only=True)
-    unknowns = lc_ms_parse_csv_lines(request.form.get('unknowns', ''), second_col_numeric_only=False)
+    unknowns = unknowns_from_quant_form(state, request.form)
     state['quant_result'] = fit_calibration_and_quantify(standards, unknowns, 'lcms')
     tech_save_state(slug, state)
     return redirect(url_for('technique_workspace', slug=slug, tab='Quantification'))
@@ -4061,7 +5297,7 @@ def lc_ms_quantify(slug):
 def hplc_gc_quantify(slug):
     state = tech_get_state(slug)
     standards = lc_ms_parse_csv_lines(request.form.get('standards', ''), second_col_numeric_only=True)
-    unknowns = lc_ms_parse_csv_lines(request.form.get('unknowns', ''), second_col_numeric_only=False)
+    unknowns = unknowns_from_quant_form(state, request.form)
     state['quant_result'] = fit_calibration_and_quantify(standards, unknowns, 'hplcgc')
     tech_save_state(slug, state)
     return redirect(url_for('technique_workspace', slug=slug, tab='Quantification'))
@@ -4598,12 +5834,32 @@ def view_force_curve(file_id):
     return render_template('view_force_curve.html', data_file=data_file, results=results)
 
 
-def build_particle_size_analysis(sizes, unit):
+def build_particle_size_analysis(sizes, unit, method_label='Manual sizing'):
     n = len(sizes)
-    mean_size = float(np.mean(sizes))
-    std_size = float(np.std(sizes))
+    sizes_arr = np.asarray(sizes, dtype=float)
+    mean_size = float(np.mean(sizes_arr))
+    std_size = float(np.std(sizes_arr))
     cv = std_size / mean_size if mean_size else 0
-    parts = [f"Manual sizing of {n} particle{'s' if n != 1 else ''}: mean diameter = {mean_size:.1f} {unit} (± {std_size:.1f} {unit} std dev), range {min(sizes):.1f}–{max(sizes):.1f} {unit}."]
+    parts = [f"{method_label} of {n} particle{'s' if n != 1 else ''}: mean diameter = {mean_size:.1f} {unit} (± {std_size:.1f} {unit} std dev), range {min(sizes):.1f}–{max(sizes):.1f} {unit}."]
+
+    if n >= 10:
+        # A real check, not just eyeballing the CV: does the histogram itself show more than
+        # one mode? Two nucleation events, aggregation, or a mixed population all show up this
+        # way — something a single mean+std can't reveal.
+        bins = min(20, max(6, n // 3))
+        counts, edges = np.histogram(sizes_arr, bins=bins)
+        centers = (edges[:-1] + edges[1:]) / 2
+        peak_idx, _ = find_peaks(counts, prominence=max(1, counts.max() * 0.15))
+        if len(peak_idx) >= 2:
+            modes = ", ".join(f"{centers[i]:.1f} {unit}" for i in peak_idx)
+            parts.append(f"The size histogram itself looks multimodal, with distinct peaks near {modes} — worth checking whether this is two genuinely different populations (separate nucleation events, aggregation, or a mixed sample) rather than one synthesis batch, since a single mean/std can hide this.")
+        else:
+            skewness = float(scipy_skew(sizes_arr)) if n >= 5 else 0.0
+            if skewness > 0.5:
+                parts.append(f"The distribution is right-skewed (skewness ≈ {skewness:.2f}) — a tail of larger particles or aggregates is pulling the mean above the typical (median) size.")
+            elif skewness < -0.5:
+                parts.append(f"The distribution is left-skewed (skewness ≈ {skewness:.2f}) — a tail of smaller particles/fragments sits alongside a dominant larger population.")
+
     if cv < 0.15:
         parts.append("The narrow size distribution (CV < 15%) indicates a fairly monodisperse particle population.")
     elif cv < 0.35:
@@ -4734,6 +5990,73 @@ MEASUREMENT_TYPE_INFO = {
     'saed_spacing': {'title': 'SAED d-spacing', 'back_slug': 'tem', 'back_tab': 'SAED', 'back_label': 'SAED'},
     'lattice_fringe': {'title': 'Lattice fringe spacing', 'back_slug': 'tem', 'back_tab': 'Lattice Fringes', 'back_label': 'Lattice Fringes'},
 }
+
+
+def combine_particle_analyses(entries):
+    """Merges multiple saved measurements into one integrated write-up per measurement
+    type, instead of a separate card for every single saved analysis — the same treatment
+    already applied to every spectroscopy technique's Analysis tab. Strain maps are excluded
+    (they're a different visual — exx/eyy/exy images, no histogram — that the caller should
+    render separately from its own, unfiltered list; they don't reduce to a size-comparison
+    sentence the way the others do).
+    Returns a list of {label, analysis_text, histogram_filenames, entries} groups."""
+    groups = {}
+    order = []
+    for e in entries:
+        mt = e['analysis'].measurement_type
+        if mt == 'strain_map':
+            continue
+        if mt not in groups:
+            groups[mt] = []
+            order.append(mt)
+        groups[mt].append(e)
+
+    combined = []
+    for mt in order:
+        items = groups[mt]
+        type_label = MEASUREMENT_TYPE_INFO.get(mt, {}).get('title', mt.replace('_', ' ').title())
+        histogram_filenames = [e['analysis'].histogram_filename for e in items if e['analysis'].histogram_filename]
+
+        if len(items) == 1:
+            e = items[0]
+            label = (e['file'].label or e['file'].original_filename) if e['file'] else 'Unknown file'
+            combined.append({'label': f"{type_label} — {label}", 'analysis_text': e['analysis'].analysis_text,
+                              'histogram_filenames': histogram_filenames, 'entries': items})
+            continue
+
+        sentences = []
+        means = []
+        for e in items:
+            label = (e['file'].label or e['file'].original_filename) if e['file'] else 'Unknown file'
+            text = (e['analysis'].analysis_text or '').strip()
+            if text and text[-1] not in '.!?':
+                text += '.'
+            sentences.append(f"{label} — {text}")
+            try:
+                sizes = json.loads(e['analysis'].sizes_nm_json)
+                if sizes:
+                    means.append((label, float(np.mean(sizes)), e['analysis'].unit))
+            except Exception:
+                pass
+
+        text = f"Across {len(items)} {type_label.lower()} measurements: " + " ".join(sentences)
+        if len(means) >= 2:
+            unit = means[0][2]
+            biggest = max(means, key=lambda m: m[1])
+            smallest = min(means, key=lambda m: m[1])
+            if biggest[0] != smallest[0] and smallest[1]:
+                spread_pct = (biggest[1] - smallest[1]) / smallest[1] * 100
+                if spread_pct > 20:
+                    text += (f" {biggest[0]} shows a notably larger mean ({biggest[1]:.1f} {unit}) than {smallest[0]} "
+                             f"({smallest[1]:.1f} {unit}) — worth checking whether that's a real difference between "
+                             f"samples/regions rather than a difference in measurement settings.")
+                else:
+                    text += f" Mean values stay broadly consistent across these measurements ({smallest[1]:.1f}–{biggest[1]:.1f} {unit})."
+
+        combined.append({'label': f"All {len(items)} {type_label.lower()} measurements", 'analysis_text': text,
+                          'histogram_filenames': histogram_filenames, 'entries': items})
+
+    return combined
 
 
 def compute_saed_spot_angles(config):

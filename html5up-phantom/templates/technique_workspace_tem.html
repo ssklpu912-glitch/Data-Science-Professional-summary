@@ -185,6 +185,58 @@
 			{% endfor %}
 		{% endif %}
 
+		{% elif active_tab == 'Segment' %}
+		<h2 style="margin-top:0; font-size: 1.3em;">Segment</h2>
+		{% if not selected_images %}
+			<p style="color: #888; font-size: 0.9em;">No images selected — go to <strong>Select images</strong> first.</p>
+		{% else %}
+			<div class="tem-note">
+				Automatic particle detection and sizing — Otsu thresholding followed by a distance-transform watershed to split touching particles, then a size histogram is drawn from the detections without clicking each one by hand. Classical only, no ML segmentation. The overlay shows exactly what was detected so counts can be checked visually before trusting them.
+			</div>
+
+			<form method="GET" action="{{ url_for('technique_workspace', slug=slug) }}">
+				<input type="hidden" name="tab" value="Segment" />
+				<div style="display: flex; align-items: center; gap: 0.6em; margin-bottom: 0.7em; flex-wrap: wrap;">
+					<label for="seg-image" style="min-width: 220px; font-size: 0.9em;">Image</label>
+					<select id="seg-image" name="image_id">
+						{% for f in selected_images %}
+						<option value="{{ f.id }}" {% if segment_result and segment_result.target.id == f.id %}selected{% endif %}>{{ f.label or f.original_filename }}</option>
+						{% endfor %}
+					</select>
+				</div>
+				<div style="display: flex; align-items: center; gap: 0.6em; margin-bottom: 0.7em; flex-wrap: wrap;">
+					<label for="min-distance" style="min-width: 220px; font-size: 0.9em;">Min. separation between particles (px)</label>
+					<input id="min-distance" type="number" name="min_distance" min="1" max="100" step="1" value="{{ segment_result.params.min_distance if segment_result else 10 }}" style="max-width: 140px;" />
+				</div>
+				<div style="display: flex; align-items: center; gap: 0.6em; margin-bottom: 0.7em; flex-wrap: wrap;">
+					<label for="thresh-offset" style="min-width: 220px; font-size: 0.9em;">Threshold offset (+stricter / −looser)</label>
+					<input id="thresh-offset" type="number" name="threshold_offset" step="1" value="{{ segment_result.params.threshold_offset if segment_result else 0 }}" style="max-width: 140px;" />
+				</div>
+				<ul class="actions"><li><input type="submit" value="Preview" class="button" /></li></ul>
+			</form>
+
+			{% if segment_result %}
+			<div class="tem-card">
+				<img src="{{ url_for('static', filename='uploads/' + segment_result.plot_filename) }}" alt="Segmentation preview" style="max-width: 100%; border-radius: 6px; border: 1px solid #ddd;" />
+				{% if segment_result.objects %}
+				<p style="margin: 0.6em 0 0 0; font-size: 0.88em;">
+					{{ segment_result.objects|length }} particle(s) detected · mean diameter {{ '%.1f' % (segment_result.objects|map(attribute='equiv_diameter_px')|sum / segment_result.objects|length) }} px
+					· mean intensity {{ '%.1f' % (segment_result.objects|map(attribute='mean_intensity')|sum / segment_result.objects|length) }}
+				</p>
+				<form method="POST" action="{{ url_for('confocal_save_segmentation') }}" style="margin-top: 1em;">
+					<input type="hidden" name="slug" value="{{ slug }}" />
+					<input type="hidden" name="image_id" value="{{ segment_result.target.id }}" />
+					<input type="hidden" name="min_distance" value="{{ segment_result.params.min_distance }}" />
+					<input type="hidden" name="threshold_offset" value="{{ segment_result.params.threshold_offset }}" />
+					<ul class="actions"><li><input type="submit" value="Save as particle analysis" class="primary" /></li></ul>
+				</form>
+				{% else %}
+				<p style="color: #888; font-size: 0.85em; margin: 0.6em 0 0 0;">No particles detected with these settings — try loosening the threshold offset.</p>
+				{% endif %}
+			</div>
+			{% endif %}
+		{% endif %}
+
 		{% elif active_tab == 'Layer Thickness' %}
 		<h2 style="margin-top:0; font-size: 1.3em;">Layer Thickness</h2>
 		{% if not selected_images %}
@@ -353,27 +405,40 @@
 		{% if not selected_images %}
 			<p style="color: #888; font-size: 0.9em;">No images selected — go to <strong>Select images</strong> first.</p>
 		{% elif not tem_analyses %}
-			<p style="color: #888; font-size: 0.9em;">No saved measurements yet for the selected image(s) — visit Measure Particles, Layer Thickness, SAED, Lattice Fringes, or Strain Mapping first.</p>
+			<p style="color: #888; font-size: 0.9em;">No saved measurements yet for the selected image(s) — visit Measure Particles, Segment, Layer Thickness, SAED, Lattice Fringes, or Strain Mapping first.</p>
 		{% else %}
-			{% for pa in tem_analyses %}
+			{% for grp in combined_particle_analyses %}
+			<div class="tem-card">
+				<strong>{{ grp.label }}</strong>
+				{% if grp.histogram_filenames|length == 1 %}
+				<img src="{{ url_for('static', filename='uploads/' + grp.histogram_filenames[0]) }}" alt="Distribution" style="max-width: 100%; margin-top: 0.6em; border-radius: 6px; border: 1px solid #ddd;" />
+				{% elif grp.histogram_filenames %}
+				<div style="display:flex; gap: 0.6em; flex-wrap: wrap; margin-top: 0.6em;">
+					{% for hist in grp.histogram_filenames %}
+					<img src="{{ url_for('static', filename='uploads/' + hist) }}" alt="Distribution" style="max-width: 32%; border-radius: 6px; border: 1px solid #ddd;" />
+					{% endfor %}
+				</div>
+				{% endif %}
+				<p style="margin: 0.6em 0 0 0; padding: 0.6em 0.9em; background: #eef6ee; border-left: 3px solid #4caf50; border-radius: 4px; font-size: 0.88em;">{{ grp.analysis_text }}</p>
+				<div style="margin-top: 0.4em;">
+					{% for e in grp.entries %}
+					<a href="{{ url_for('view_particle_analysis', analysis_id=e.analysis.id) }}" style="font-size: 0.85em; margin-right: 1em;">View full analysis ({{ e.file.label or e.file.original_filename if e.file else 'file' }}) →</a>
+					{% endfor %}
+				</div>
+			</div>
+			{% endfor %}
+			{% for pa in tem_analyses if pa.analysis.measurement_type == 'strain_map' %}
 			<div class="tem-card">
 				<strong>{{ pa.file.label or pa.file.original_filename if pa.file else 'Unknown file' }}</strong>
-				<span style="color: #888; font-size: 0.85em; margin-left: 0.5em;">{{ pa.analysis.created_at.strftime('%Y-%m-%d %H:%M') }} · {{ pa.analysis.measurement_type.replace('_', ' ') | title }}</span>
-				{% if pa.analysis.measurement_type == 'strain_map' %}
-					{% if pa.extra_images %}
-					<div style="display:flex; gap: 0.6em; flex-wrap: wrap; margin-top: 0.6em;">
-						{% for im in pa.extra_images %}
-						<img src="{{ url_for('static', filename='uploads/' + im.filename) }}" alt="{{ im.label }}" style="max-width: 32%; border-radius: 6px; border: 1px solid #ddd;" />
-						{% endfor %}
-					</div>
-					{% endif %}
-					<a href="{{ url_for('view_strain_map', analysis_id=pa.analysis.id) }}" style="font-size: 0.85em;">View full analysis →</a>
-				{% else %}
-					{% if pa.analysis.histogram_filename %}
-					<img src="{{ url_for('static', filename='uploads/' + pa.analysis.histogram_filename) }}" alt="Distribution" style="max-width: 100%; margin-top: 0.6em; border-radius: 6px; border: 1px solid #ddd;" />
-					{% endif %}
-					<a href="{{ url_for('view_particle_analysis', analysis_id=pa.analysis.id) }}" style="font-size: 0.85em;">View full analysis →</a>
+				<span style="color: #888; font-size: 0.85em; margin-left: 0.5em;">{{ pa.analysis.created_at.strftime('%Y-%m-%d %H:%M') }} · Strain map</span>
+				{% if pa.extra_images %}
+				<div style="display:flex; gap: 0.6em; flex-wrap: wrap; margin-top: 0.6em;">
+					{% for im in pa.extra_images %}
+					<img src="{{ url_for('static', filename='uploads/' + im.filename) }}" alt="{{ im.label }}" style="max-width: 32%; border-radius: 6px; border: 1px solid #ddd;" />
+					{% endfor %}
+				</div>
 				{% endif %}
+				<a href="{{ url_for('view_strain_map', analysis_id=pa.analysis.id) }}" style="font-size: 0.85em;">View full analysis →</a>
 				<p style="margin: 0.6em 0 0 0; padding: 0.6em 0.9em; background: #eef6ee; border-left: 3px solid #4caf50; border-radius: 4px; font-size: 0.88em;">{{ pa.analysis.analysis_text }}</p>
 			</div>
 			{% endfor %}

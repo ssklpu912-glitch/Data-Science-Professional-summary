@@ -384,46 +384,7 @@
 		<p style="color: #888; font-size: 0.85em; margin-top: -0.6em;">Generate a noisy curve of a known shape — handy for trying Plot, Derivative and the Analysis tab's Shape suggestions against a known answer. The result is saved to your files (badged <strong>Simulated</strong>), selected, and opened on Analysis.</p>
 		{% if sim_error %}<div style="background: #fdecea; color: #b3261e; padding: 0.7em 1em; border-radius: 8px; margin-bottom: 1em; font-size: 0.85em;">{{ sim_error }}</div>{% endif %}
 
-		<h3 style="margin: 1.2em 0 0.6em 0; font-size: 1em;">Select experimental files</h3>
-		<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
-			<form method="POST" action="{{ url_for('upload_data_file') }}" enctype="multipart/form-data">
-				<div class="field">
-					<label for="data_file">Import new file(s)</label>
-					<input type="file" id="data_file" name="data_file" multiple />
-				</div>
-				<div class="field">
-					<label for="label">Label (optional)</label>
-					<input type="text" id="label" name="label" placeholder="e.g. Sample 3 — Control" />
-				</div>
-				<ul class="actions"><li><input type="submit" value="Import" class="button" /></li></ul>
-			</form>
-		</div>
-
-		{% set real_files = all_files|rejectattr('is_simulated')|list %}
-		{% if real_files %}
-		<form method="POST" action="{{ url_for('dp_select_files') }}" style="margin-bottom: 1.6em;">
-			<div style="max-height: 280px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 0.8em; margin-bottom: 1em;">
-				{% for f in real_files %}
-				<div class="dp-file-row" data-file-id="{{ f.id }}"
-					 onclick="toggleDpFile({{ f.id }})"
-					 style="display: flex; align-items: center; gap: 0.6em; padding: 0.5em 0.3em; border-bottom: 1px solid #eee; cursor: pointer; user-select: none; border-radius: 6px; font-size: 0.9em; {% if f.id in state.file_ids %}background: #eaeaea;{% endif %}">
-					<span id="dp-box-{{ f.id }}"
-						  style="display: inline-block; width: 16px; height: 16px; min-width: 16px; border: 2px solid {% if f.id in state.file_ids %}#333{% else %}#999{% endif %}; border-radius: 4px; background: {% if f.id in state.file_ids %}#333{% else %}#fff{% endif %}; position: relative;">
-						{% if f.id in state.file_ids %}<span style="position:absolute; left:2px; top:-2px; color:#fff; font-size:12px; line-height:1;">✓</span>{% endif %}
-					</span>
-					<span style="flex: 1;"><strong>{{ f.label or f.original_filename }}</strong> <span style="color:#888; font-size:0.85em;">{{ f.uploaded_at.strftime('%Y-%m-%d') }}</span></span>
-					<button type="button" onclick="event.stopPropagation(); deleteDpFile({{ f.id }}, this);" title="Remove this file"
-							style="background: none; border: none; color: #b3261e; cursor: pointer; font-size: 1em; padding: 0.2em 0.5em;">✕</button>
-					<input type="checkbox" name="file_ids" value="{{ f.id }}" id="dp-cb-{{ f.id }}"
-						   {% if f.id in state.file_ids %}checked{% endif %}
-						   style="display: none !important; pointer-events: none !important; position: absolute; opacity: 0; width: 0; height: 0;" tabindex="-1" />
-				</div>
-				{% endfor %}
-			</div>
-			<ul class="actions"><li><input type="submit" value="Use selected experimental files →" class="primary" /></li></ul>
-		</form>
-		{% endif %}
-		<form method="POST" action="{{ url_for('dp_simulate') }}" id="curve-sim-form" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+		<form method="POST" action="{{ url_for('dp_simulate') }}" id="curve-sim-form" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.6em;">
 			<div class="field">
 				<label for="cs-shape">Curve shape</label>
 				<select id="cs-shape" name="shape">
@@ -459,7 +420,56 @@
 				render();
 			})();
 		</script>
-			<h3 style="margin: 1.6em 0 0.4em 0; font-size: 1.05em;">Select simulated files</h3>
+
+		<!-- Two tabs: "Import new files" (upload + pick experimental files) and "Simulated files" (pick from what's already been simulated) -->
+		<div style="display: flex; gap: 0.4em; border-bottom: 2px solid #ddd; margin-bottom: 1.2em;">
+			<div id="sim-pill-import" class="sim-pill sim-pill-active" onclick="showSimPanel('import')"
+				 style="cursor: pointer; user-select: none; padding: 0.6em 1.1em; border-radius: 8px 8px 0 0; font-weight: 700; font-size: 0.92em; background: #eef6ee; color: #2f5d34; border: 1px solid #ddd; border-bottom: 2px solid #4caf50; margin-bottom: -2px;">📁 Import new files</div>
+			<div id="sim-pill-simulated" class="sim-pill" onclick="showSimPanel('simulated')"
+				 style="cursor: pointer; user-select: none; padding: 0.6em 1.1em; border-radius: 8px 8px 0 0; font-weight: 700; font-size: 0.92em; background: #f2f2f2; color: #777; border: 1px solid transparent;">✏️ Simulated files</div>
+		</div>
+
+		<div id="sim-panel-import">
+			<div style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+				<form method="POST" action="{{ url_for('upload_data_file') }}" enctype="multipart/form-data">
+					<div class="field">
+						<input type="file" id="data_file" name="data_file" multiple />
+					</div>
+					<div class="field">
+						<label for="label">Label (optional)</label>
+						<input type="text" id="label" name="label" placeholder="e.g. Sample 3 — Control" />
+					</div>
+					<ul class="actions"><li><input type="submit" value="Import" class="button" /></li></ul>
+				</form>
+			</div>
+
+			{% set real_files = all_files|rejectattr('is_simulated')|list %}
+			{% if real_files %}
+			<form method="POST" action="{{ url_for('dp_select_files') }}">
+				<div style="max-height: 280px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 0.8em; margin-bottom: 1em;">
+					{% for f in real_files %}
+					<div class="dp-file-row" data-file-id="{{ f.id }}"
+						 onclick="toggleDpFile({{ f.id }})"
+						 style="display: flex; align-items: center; gap: 0.6em; padding: 0.5em 0.3em; border-bottom: 1px solid #eee; cursor: pointer; user-select: none; border-radius: 6px; font-size: 0.9em; {% if f.id in state.file_ids %}background: #eaeaea;{% endif %}">
+						<span id="dp-box-{{ f.id }}"
+							  style="display: inline-block; width: 16px; height: 16px; min-width: 16px; border: 2px solid {% if f.id in state.file_ids %}#333{% else %}#999{% endif %}; border-radius: 4px; background: {% if f.id in state.file_ids %}#333{% else %}#fff{% endif %}; position: relative;">
+							{% if f.id in state.file_ids %}<span style="position:absolute; left:2px; top:-2px; color:#fff; font-size:12px; line-height:1;">✓</span>{% endif %}
+						</span>
+						<span style="flex: 1;"><strong>{{ f.label or f.original_filename }}</strong> <span style="color:#888; font-size:0.85em;">{{ f.uploaded_at.strftime('%Y-%m-%d') }}</span></span>
+						<button type="button" onclick="event.stopPropagation(); deleteDpFile({{ f.id }}, this);" title="Remove this file"
+								style="background: none; border: none; color: #b3261e; cursor: pointer; font-size: 1em; padding: 0.2em 0.5em;">✕</button>
+						<input type="checkbox" name="file_ids" value="{{ f.id }}" id="dp-cb-{{ f.id }}"
+							   {% if f.id in state.file_ids %}checked{% endif %}
+							   style="display: none !important; pointer-events: none !important; position: absolute; opacity: 0; width: 0; height: 0;" tabindex="-1" />
+					</div>
+					{% endfor %}
+				</div>
+				<ul class="actions"><li><input type="submit" value="Use selected experimental files →" class="primary" /></li></ul>
+			</form>
+			{% endif %}
+		</div>
+
+		<div id="sim-panel-simulated" style="display: none;">
 			{% if simulated_files %}
 			<p style="font-size: 0.82em; color: #888; margin: 0 0 0.8em 0;">Your simulated data lives here, separate from real uploads. Tick one or more and use them &mdash; this replaces your current file selection.</p>
 			<form method="POST" action="{{ url_for('dp_select_files') }}">
@@ -518,6 +528,21 @@
 			{% else %}
 			<p style="color: #888; font-size: 0.9em;">Nothing simulated yet &mdash; generate something above and it will appear here.</p>
 			{% endif %}
+		</div>
+		<script>
+			function showSimPanel(which) {
+				var showImport = which === 'import';
+				document.getElementById('sim-panel-import').style.display = showImport ? '' : 'none';
+				document.getElementById('sim-panel-simulated').style.display = showImport ? 'none' : '';
+				var pImport = document.getElementById('sim-pill-import'), pSim = document.getElementById('sim-pill-simulated');
+				pImport.style.background = showImport ? '#eef6ee' : '#f2f2f2';
+				pImport.style.color = showImport ? '#2f5d34' : '#777';
+				pImport.style.borderBottom = showImport ? '2px solid #4caf50' : '1px solid transparent';
+				pSim.style.background = showImport ? '#f2f2f2' : '#eef6ee';
+				pSim.style.color = showImport ? '#777' : '#2f5d34';
+				pSim.style.borderBottom = showImport ? '1px solid transparent' : '2px solid #4caf50';
+			}
+		</script>
 
 		{% elif tab == 'compare' %}
 		<h2 style="margin-top:0; font-size: 1.3em;">Compare</h2>

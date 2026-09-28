@@ -1,0 +1,7 @@
+# Install with:  pip install --no-deps -r requirements-nodeps.txt
+# pySPM declares numpy<2 (and pulls in ipython/seaborn/scikit-learn it doesn't need at
+# runtime), which conflicts with numpy 2.x in requirements.txt. Both work fine on numpy 2.x,
+# so they're installed without their declared deps; the deps they actually import are
+# pinned in requirements.txt.
+pySPM==0.3.4
+AFMReader==0.0.7

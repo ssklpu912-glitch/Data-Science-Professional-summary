@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% block title %}{{ technique_name }} — LabLogbook{% endblock %}
+{% block content %}
+<style>
+	#main > .inner {
+		max-width: 100% !important;
+		padding: 0 2rem !important;
+	}
+</style>
+<header>
+	<h1>{{ technique_name }}</h1>
+	<p>{% if parent_category %}Under {{ parent_category }}{% endif %}</p>
+</header>
+
+<div style="max-width: 96%; margin: 0 auto 1.5em auto; padding: 0 1em;">
+	<a href="{{ url_for('computational_home') }}">← Back to Computational</a>
+</div>
+
+{% if comp_error %}
+<div style="max-width: 96%; margin: 0 auto 1.5em auto; padding: 0.8em 1.2em; background: #fdecea; color: #b3261e; border-radius: 8px;">
+	{{ comp_error }}
+</div>
+{% endif %}
+
+<div id="workspace-anchor"></div>
+<div style="display: flex; gap: 2em; align-items: flex-start; max-width: 96%; margin: 0 auto; padding: 0 1em;">
+
+	<!-- Column 1: Sidebar tabs -->
+	<table class="ws-tabs" style="flex: 0 0 190px;" cellpadding="0" cellspacing="0">
+		<tbody>
+		{% for tab_name in tabs %}
+		<tr>
+			<td class="{{ 'active' if tab_name == active_tab else '' }}">
+				<a href="{{ url_for('technique_workspace', slug=slug, tab=tab_name) }}">
+					{{ tab_name }}
+				</a>
+			</td>
+		</tr>
+		{% endfor %}
+		</tbody>
+	</table>
+
+	<!-- Column 2: Controls + results for the active tab -->
+	<div style="flex: 1; min-width: 0;">
+		<h2 style="margin-top: 0; font-size: 1.3em;">{{ active_tab }}</h2>
+
+		{% if active_tab == 'Ising Model' %}
+			<p style="color: #666; font-size: 0.88em; margin-top: -0.4em;">Real Metropolis Monte Carlo on a periodic L×L 2D Ising lattice — every run computes a fresh spin configuration; nothing here is precomputed. Default temperature sits at the theoretical critical point T<sub>c</sub> ≈ 2.269 (in units of J/k<sub>B</sub>), where the phase transition happens.</p>
+			<form method="POST" action="{{ url_for('comp_run_ising', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+				<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+				<div class="field">
+					<label for="ising-L">Lattice size L (L×L spins, max 128)</label>
+					<input type="number" id="ising-L" name="L" min="4" max="128" value="32" />
+				</div>
+				<div class="field">
+					<label for="ising-T">Temperature (J/k<sub>B</sub> units)</label>
+					<input type="number" id="ising-T" name="temperature" min="0.1" max="10" step="0.01" value="2.269" />
+				</div>
+				<div class="field">
+					<label for="ising-sweeps">Sweeps to record (after burn-in)</label>
+					<input type="number" id="ising-sweeps" name="n_sweeps" min="10" max="4000" value="200" />
+				</div>
+				<div class="field">
+					<label for="ising-seed">Random seed (optional)</label>
+					<input type="text" id="ising-seed" name="seed" placeholder="e.g. 42" />
+				</div>
+				<ul class="actions"><li><input type="submit" value="Run simulation" class="primary" /></li></ul>
+			</form>
+
+			{% if result %}
+			<div style="background: #eef6ee; border-left: 4px solid #4caf50; border-radius: 6px; padding: 1em 1.2em;">
+				<p style="margin: 0 0 0.4em 0; font-size: 0.9em;">L = {{ result.L }}, T = {{ result.temperature }} (T<sub>c</sub> reference = {{ result.T_c_reference }}), {{ result.n_sweeps }} recorded sweeps</p>
+				<p style="margin: 0; font-size: 0.9em;">Mean |magnetization| / site = <strong>{{ result.mean_abs_magnetization }}</strong> (σ = {{ result.std_magnetization }})<br>
+				Mean energy / site = <strong>{{ result.mean_energy_per_site }}</strong> J units</p>
+			</div>
+			{% endif %}
+
+		{% elif active_tab == 'Monte Carlo Integration' %}
+			<p style="color: #666; font-size: 0.88em; margin-top: -0.4em;">Estimates a real integral by random sampling — accuracy improves as 1/√N, shown by the convergence plot against the known exact value.</p>
+			<form method="POST" action="{{ url_for('comp_run_mc_integration', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+				<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+				<div class="field">
+					<label for="mci-target">What to estimate</label>
+					<select id="mci-target" name="target">
+						{% for key, spec in mc_integrals.items() %}
+						<option value="{{ key }}" {{ 'selected' if key == 'circle' else '' }}>{{ spec.label }}</option>
+						{% endfor %}
+					</select>
+				</div>
+				<div class="field">
+					<label for="mci-n">Number of samples (max 2,000,000)</label>
+					<input type="number" id="mci-n" name="n_samples" min="100" max="2000000" value="100000" />
+				</div>
+				<div class="field">
+					<label for="mci-seed">Random seed (optional)</label>
+					<input type="text" id="mci-seed" name="seed" placeholder="e.g. 42" />
+				</div>
+				<ul class="actions"><li><input type="submit" value="Run estimation" class="primary" /></li></ul>
+			</form>
+
+			{% if result %}
+			<div style="background: #eef6ee; border-left: 4px solid #4caf50; border-radius: 6px; padding: 1em 1.2em;">
+				<p style="margin: 0 0 0.4em 0; font-size: 0.9em;">{{ result.label }} — {{ '{:,}'.format(result.n_samples) }} samples</p>
+				<p style="margin: 0; font-size: 0.9em;">Estimate = <strong>{{ result.estimate }}</strong> ± {{ result.std_error }}
+				{% if result.exact is not none %}<br>Exact value = {{ '%.6f' % result.exact }} (absolute error = {{ result.abs_error }}){% endif %}</p>
+			</div>
+			{% endif %}
+
+		{% elif active_tab == 'Random Walk' %}
+			<p style="color: #666; font-size: 0.88em; margin-top: -0.4em;">Simulates many independent random walkers and fits mean-squared displacement (MSD) vs. step to recover a diffusion coefficient — the same MSD ∝ t relationship used to extract D from real tracer/diffusion data.</p>
+			<form method="POST" action="{{ url_for('comp_run_random_walk', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+				<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+				<div class="field">
+					<label for="rw-steps">Steps per walker (max 200,000)</label>
+					<input type="number" id="rw-steps" name="n_steps" min="10" max="200000" value="2000" />
+				</div>
+				<div class="field">
+					<label for="rw-walkers">Number of walkers (max 2,000)</label>
+					<input type="number" id="rw-walkers" name="n_walkers" min="1" max="2000" value="200" />
+				</div>
+				<div class="field">
+					<label for="rw-dim">Dimensions</label>
+					<select id="rw-dim" name="dim">
+						<option value="1">1D</option>
+						<option value="2" selected>2D</option>
+						<option value="3">3D</option>
+					</select>
+				</div>
+				<div class="field">
+					<label for="rw-step">Step size</label>
+					<input type="number" id="rw-step" name="step_size" min="0.01" step="0.01" value="1.0" />
+				</div>
+				<div class="field">
+					<label for="rw-seed">Random seed (optional)</label>
+					<input type="text" id="rw-seed" name="seed" placeholder="e.g. 42" />
+				</div>
+				<ul class="actions"><li><input type="submit" value="Run simulation" class="primary" /></li></ul>
+			</form>
+
+			{% if result %}
+			<div style="background: #eef6ee; border-left: 4px solid #4caf50; border-radius: 6px; padding: 1em 1.2em;">
+				<p style="margin: 0 0 0.4em 0; font-size: 0.9em;">{{ result.n_walkers }} walkers, {{ result.n_steps }} steps, {{ result.dim }}D, step size {{ result.step_size }}</p>
+				<p style="margin: 0; font-size: 0.9em;">Diffusion coefficient D (from MSD slope) = <strong>{{ result.diffusion_coefficient }}</strong><br>Final mean squared displacement = {{ result.final_msd }}</p>
+			</div>
+			{% endif %}
+
+		{% elif active_tab == 'Run Calculation' %}
+			<p style="color: #666; font-size: 0.88em; margin-top: -0.4em;">Real single-point Kohn–Sham DFT via PySCF — a genuine electronic-structure calculation, not a lookup. Scoped to small molecules (≤30 atoms) and modest basis sets to keep runtime to roughly a minute; not a substitute for a properly converged production calculation (geometry optimization, larger basis sets, solvation, etc. all change the numbers).</p>
+			<form method="POST" action="{{ url_for('comp_run_dft', slug=slug) }}" style="background: #f7f7f7; border-radius: 10px; padding: 1.2em; margin-bottom: 1.2em;">
+				<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+				<div class="field">
+					<label for="dft-input-type">Structure input</label>
+					<select id="dft-input-type" name="input_type" onchange="dftToggleInput()">
+						<option value="smiles" selected>SMILES string</option>
+						<option value="xyz">XYZ coordinates</option>
+					</select>
+				</div>
+				<div class="field" id="dft-smiles-field">
+					<label for="dft-smiles">SMILES</label>
+					<input type="text" id="dft-smiles" name="structure" placeholder="e.g. O (water), CCO (ethanol), c1ccccc1 (benzene)" />
+					<p style="font-size: 0.78em; color: #888; margin: 0.3em 0 0 0;">3D geometry is built with RDKit (MMFF-optimized) before the DFT calculation.</p>
+				</div>
+				<div class="field" id="dft-xyz-field" style="display: none;">
+					<label for="dft-xyz">XYZ coordinates (one atom per line: Element x y z)</label>
+					<textarea id="dft-xyz" name="structure" rows="6" style="font-family: monospace; font-size: 0.85em;" placeholder="O 0.0 0.0 0.0&#10;H 0.0 0.757 0.587&#10;H 0.0 -0.757 0.587"></textarea>
+				</div>
+				<script>
+					function dftToggleInput() {
+						var sel = document.getElementById('dft-input-type').value;
+						document.getElementById('dft-smiles-field').style.display = sel === 'smiles' ? '' : 'none';
+						document.getElementById('dft-xyz-field').style.display = sel === 'xyz' ? '' : 'none';
+					}
+				</script>
+				<div class="field">
+					<label for="dft-label">Label (optional)</label>
+					<input type="text" id="dft-label" name="label" placeholder="e.g. Ligand candidate 3" />
+				</div>
+				<div class="field">
+					<label for="dft-basis">Basis set</label>
+					<select id="dft-basis" name="basis">
+						{% for b in dft_basis_options %}<option value="{{ b }}" {{ 'selected' if b == '6-31g' else '' }}>{{ b }}</option>{% endfor %}
+					</select>
+				</div>
+				<div class="field">
+					<label for="dft-functional">Functional</label>
+					<select id="dft-functional" name="functional">
+						{% for f in dft_functional_options %}<option value="{{ f }}" {{ 'selected' if f == 'b3lyp' else '' }}>{{ f | upper }}</option>{% endfor %}
+					</select>
+				</div>
+				<div class="field">
+					<label for="dft-charge">Charge</label>
+					<input type="number" id="dft-charge" name="charge" value="0" step="1" />
+				</div>
+				<div class="field">
+					<label for="dft-spin">Spin (2S, i.e. 0 for closed-shell singlet)</label>
+					<input type="number" id="dft-spin" name="spin" value="0" min="0" step="1" />
+				</div>
+				<ul class="actions"><li><input type="submit" value="Run DFT calculation" class="primary" /></li></ul>
+				<p style="font-size: 0.78em; color: #888; margin-top: 0.6em;">Small molecules typically finish in a few seconds to about a minute; the page will wait for the calculation to complete.</p>
+			</form>
+
+			{% if result %}
+			<div style="background: #eef6ee; border-left: 4px solid #4caf50; border-radius: 6px; padding: 1em 1.2em;">
+				<p style="margin: 0 0 0.5em 0; font-size: 0.92em;"><strong>{{ result.label }}</strong> — {{ result.n_atoms }} atoms, {{ result.functional | upper }}/{{ result.basis }}, charge {{ result.charge }}, spin {{ result.spin }} ({{ result.elapsed_seconds }}s)</p>
+				<table style="width: 100%; border-collapse: collapse; font-size: 0.88em;">
+					<tbody>
+						<tr><td style="padding: 0.25em 0.5em 0.25em 0; color: #555;">Total energy</td><td style="padding: 0.25em 0;"><strong>{{ result.energy_hartree }}</strong> Hartree ({{ result.energy_ev }} eV)</td></tr>
+						<tr><td style="padding: 0.25em 0.5em 0.25em 0; color: #555;">HOMO</td><td style="padding: 0.25em 0;">{{ result.homo_ev }} eV</td></tr>
+						<tr><td style="padding: 0.25em 0.5em 0.25em 0; color: #555;">LUMO</td><td style="padding: 0.25em 0;">{{ result.lumo_ev }} eV</td></tr>
+						<tr><td style="padding: 0.25em 0.5em 0.25em 0; color: #555;">HOMO–LUMO gap</td><td style="padding: 0.25em 0;"><strong>{{ result.gap_ev }}</strong> eV</td></tr>
+						<tr><td style="padding: 0.25em 0.5em 0.25em 0; color: #555;">Dipole moment</td><td style="padding: 0.25em 0;">{{ result.dipole_debye }} Debye</td></tr>
+					</tbody>
+				</table>
+				<details style="margin-top: 0.8em;">
+					<summary style="cursor: pointer; color: #888; font-size: 0.82em;">Geometry used (XYZ, Å)</summary>
+					<pre style="font-size: 0.78em; background: #fff; padding: 0.6em; border-radius: 6px; overflow-x: auto; margin: 0.4em 0 0 0;">{{ result.geometry_xyz }}</pre>
+				</details>
+			</div>
+			{% endif %}
+
+		{% endif %}
+	</div>
+</div>
+
+<script>
+	document.getElementById('workspace-anchor').scrollIntoView();
+</script>
+{% endblock %}
