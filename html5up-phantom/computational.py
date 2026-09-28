@@ -380,3 +380,18 @@ def run_dft(structure_input, input_type='smiles', basis='6-31g', functional='b3l
         'elapsed_seconds': round(elapsed, 2),
         'geometry_xyz': atom_str.replace('; ', '\n'),
     }
+
+
+def run_dft_job(**kwargs):
+    """Entry point for the background compute worker (RQ). Never raises: returns
+    {'ok': True, 'result': ...} or {'ok': False, 'error': <message for the user>}, so the
+    web app can show the same inline error it would for a synchronous run instead of a
+    worker traceback."""
+    try:
+        return {'ok': True, 'result': run_dft(**kwargs)}
+    except DFTInputError as e:
+        return {'ok': False, 'error': str(e)}
+    except ImportError:
+        return {'ok': False, 'error': 'PySCF is not installed on this server, so DFT is unavailable here.'}
+    except Exception as e:
+        return {'ok': False, 'error': f'DFT calculation failed: {e}'}

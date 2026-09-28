@@ -16,6 +16,13 @@
 	<a href="{{ url_for('computational_home') }}">← Back to Computational</a>
 </div>
 
+{% if job_running %}
+<div style="max-width: 96%; margin: 0 auto 1.5em auto; padding: 0.8em 1.2em; background: #eaf4ea; color: #2a6f2a; border-radius: 8px;">
+	Your DFT calculation is running on the server… this page refreshes itself and shows the result as soon as it's done. You can leave and come back.
+</div>
+<script>setTimeout(function () { window.location.reload(); }, 4000);</script>
+{% endif %}
+
 {% if comp_error %}
 <div style="max-width: 96%; margin: 0 auto 1.5em auto; padding: 0.8em 1.2em; background: #fdecea; color: #b3261e; border-radius: 8px;">
 	{{ comp_error }}
@@ -195,8 +202,8 @@
 					<label for="dft-spin">Spin (2S, i.e. 0 for closed-shell singlet)</label>
 					<input type="number" id="dft-spin" name="spin" value="0" min="0" step="1" />
 				</div>
-				<ul class="actions"><li><input type="submit" value="Run DFT calculation" class="primary" /></li></ul>
-				<p style="font-size: 0.78em; color: #888; margin-top: 0.6em;">Small molecules typically finish in a few seconds to about a minute; the page will wait for the calculation to complete.</p>
+				<ul class="actions"><li><input type="submit" value="{{ 'Calculation running…' if job_running else 'Run DFT calculation' }}" class="primary" {{ 'disabled' if job_running else '' }} /></li></ul>
+				<p style="font-size: 0.78em; color: #888; margin-top: 0.6em;">Small molecules typically finish in a few seconds to about a minute.</p>
 			</form>
 
 			{% if result %}
